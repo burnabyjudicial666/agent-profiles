@@ -1,5 +1,6 @@
 mod paths;
 mod platform;
+mod profile_store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
