@@ -33,6 +33,19 @@ separate `--user-data-dir` values and both ran independently. Electron enforces
 single-instance via a lock file *inside* the user-data directory, so distinct
 directories mean distinct locks.
 
+**There is no single-instance lock (verified 2026-08-12).** Running the binary
+twice against the *same* `--user-data-dir` does **not** produce a focus-the-existing-window
+handoff, as most Electron apps do. Both processes stay alive and fight over one
+profile, logging `Could not open the quota database, resetting`.
+
+Two consequences, both load-bearing:
+
+- "Focus by relaunching the same command" is not available on any platform.
+- Launching a profile that is already running risks corrupting its data. The tray
+  therefore offers Focus rather than Launch for a live profile, and `launch()`
+  re-checks liveness immediately before spawning, because a menu built seconds
+  ago may be stale. This is a data-safety guard, not a convenience.
+
 **Windows and Linux: unverified.** The mechanism is Electron's, not macOS's, so it
 is expected to hold, but it was not tested — this design was written on a Mac with
 no access to the other two platforms. Each platform backend therefore carries a
@@ -50,7 +63,8 @@ unaffected.
 | Our data root | `~/Library/Application Support/Claude Profiles` | `%APPDATA%\Claude Profiles` | `~/.config/claude-profiles` |
 | Process listing | `ps -axo pid=,args=` | `Get-CimInstance Win32_Process` via PowerShell | `ps -axo pid=,args=` |
 | Quit | SIGTERM → SIGKILL | `taskkill /PID` → `/F` | SIGTERM → SIGKILL |
-| Focus | `NSRunningApplication` | Win32 `SetForegroundWindow` | best-effort, may be unsupported |
+| Focus | `NSRunningApplication` | Win32 `SetForegroundWindow` | desktop entry per profile; `xdotool` on X11 |
+| Per-instance identity | none (one Dock icon) | none | `--class` + generated `.desktop` |
 | Shared config | symlink | hardlink | symlink |
 
 Three of these deserve explanation.
@@ -71,12 +85,32 @@ re-established before every launch, and a broken link is detected by the same
 "is it a regular file?" branch that already adopts contents back into the shared
 copy.
 
-**Linux focus may be impossible.** Under native Wayland, no application can raise
-another application's window without compositor cooperation. The Linux backend
-tries `wmctrl` and then `xdotool`, and if neither works it reports focus as
-unsupported. The tray then shows the instance as running but the row does nothing
-on click, with a tooltip saying so. This is a genuine platform limitation, not a
-bug to fix later.
+**Linux gives each instance its own desktop identity instead of chasing windows.**
+Under native Wayland no application may raise another application's window, so the
+Linux backend does not try to solve focus by force. It solves it by making the
+desktop environment able to do the job:
+
+- Every instance is launched with `--class=claude-profiles-<slug>`, which Chromium
+  turns into `WM_CLASS` on X11 and `app_id` on Wayland.
+- For each profile, Claude Profiles writes
+  `~/.local/share/applications/claude-profiles-<slug>.desktop` with
+  `Name=Claude — <label>`, the profile's own icon, and a matching
+  `StartupWMClass=claude-profiles-<slug>`.
+
+The desktop environment then treats each profile as a separate application: its
+own taskbar entry, its own name, its own alt-tab slot. The user focuses a profile
+the same way they focus anything else, which is more seamless than a tray click
+could ever be, and it works identically on X11 and Wayland.
+
+Focus from the tray remains a bonus: on X11 the backend uses
+`xdotool search --class`, and on Wayland it reports `FocusOutcome::Unsupported`
+with a message pointing at the taskbar entry. A tray row that cannot raise a
+window is not a dead end, because the window is reachable by normal means.
+
+This is the inverse of the macOS decision: there, per-profile app bundles were
+rejected over code-signing risk. A `.desktop` file carries no such cost, so on
+Linux the per-profile identity is simply free. The `.desktop` files are removed
+when a profile is deleted.
 
 ## Scope
 

@@ -210,6 +210,22 @@ git commit -m "chore: scaffold Claude Profiles as a Tauri v2 tray app"
         fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> Result<()>;
         fn focus(&self, pid: i32) -> Result<FocusOutcome>;
         fn quit(&self, pid: i32) -> Result<()>;
+
+        /// Extra arguments this platform needs at launch. Linux supplies
+        /// `--class=…`; the others supply nothing. `--user-data-dir` is appended
+        /// after these, because the Windows parser reads it to end-of-line.
+        fn extra_launch_args(&self, _profile: &Profile) -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Give a profile its own desktop identity, where the platform has one.
+        /// Linux writes a `.desktop` entry; the others do nothing.
+        fn register_identity(&self, _profile: &Profile) -> Result<()> {
+            Ok(())
+        }
+        fn unregister_identity(&self, _profile: &Profile) -> Result<()> {
+            Ok(())
+        }
     }
     ```
   - `pub fn current() -> Box<dyn Platform>` — compiles to the one backend for this OS
@@ -1579,11 +1595,33 @@ git commit -m "feat: Windows platform backend with MSIX-aware path probing"
 - Consumes: `unix_ps`, the `Platform` trait
 - Produces:
   - `pub struct Linux;` implementing `Platform`
-  - `pub fn focus_tool(available: &[&str]) -> Option<&'static str>`
+  - `pub fn slug(label: &str) -> String`
+  - `pub fn wm_class(label: &str) -> String` — `claude-profiles-<slug>`
+  - `pub fn desktop_entry(label: &str, exec: &str, icon: &str) -> String`
+  - `pub fn desktop_file_path(applications_dir: &Path, label: &str) -> PathBuf`
+  - `pub fn is_wayland(session_type: Option<&str>) -> bool`
 
 Paths: data root `$XDG_CONFIG_HOME/claude-profiles` (falling back to `~/.config/claude-profiles`); default profile `~/.config/Claude`; binary resolved from `PATH` as `claude-desktop`.
 
-Focusing is genuinely unavailable under native Wayland. The backend tries `wmctrl`, then `xdotool`, and otherwise returns `FocusOutcome::Unsupported`.
+**Linux does not chase windows.** Under native Wayland no application may raise
+another's window, so instead of fighting that, each instance is given its own
+desktop identity and the desktop environment does the focusing:
+
+- Launch with `--class=claude-profiles-<slug>`, which Chromium turns into
+  `WM_CLASS` on X11 and `app_id` on Wayland.
+- Write `~/.local/share/applications/claude-profiles-<slug>.desktop` with
+  `Name=Claude — <label>` and a matching `StartupWMClass`.
+
+Each profile then gets its own taskbar entry, name, and alt-tab slot. Tray focus
+becomes a bonus: `xdotool search --class` on X11, an honest `Unsupported` message
+pointing at the taskbar entry on Wayland.
+
+`--class` therefore joins `--user-data-dir` in the launch arguments **on Linux
+only**, which means `launch_args` in Task 11 can no longer be platform-blind. Add
+`fn extra_launch_args(&self, profile: &Profile) -> Vec<String>` to the `Platform`
+trait, defaulting to an empty vec, implemented only here; `instance_manager::launch`
+appends it. Put `--user-data-dir` last, because the Windows parser in Task 6 reads
+it to the end of the command line.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1595,18 +1633,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wmctrl_is_preferred_over_xdotool() {
-        assert_eq!(focus_tool(&["xdotool", "wmctrl"]), Some("wmctrl"));
+    fn labels_become_filesystem_and_wm_safe_slugs() {
+        assert_eq!(slug("Kerja"), "kerja");
+        assert_eq!(slug("Work / Client A"), "work-client-a");
+        assert_eq!(slug("  spaced  out  "), "spaced-out");
+        assert_eq!(wm_class("Kerja"), "claude-profiles-kerja");
     }
 
     #[test]
-    fn xdotool_is_used_when_wmctrl_is_absent() {
-        assert_eq!(focus_tool(&["xdotool"]), Some("xdotool"));
+    fn two_labels_that_slug_the_same_do_not_collide_silently() {
+        // Callers must disambiguate; the slug function itself is pure.
+        assert_eq!(slug("Work A"), slug("work  a"));
     }
 
     #[test]
-    fn neither_tool_means_focusing_is_unsupported() {
-        assert_eq!(focus_tool(&[]), None);
+    fn the_desktop_entry_declares_a_matching_startup_wm_class() {
+        let entry = desktop_entry("Kerja", "/usr/bin/claude-desktop --class=x", "/i/icon.png");
+        assert!(entry.contains("Name=Claude — Kerja"));
+        assert!(entry.contains("StartupWMClass=claude-profiles-kerja"));
+        assert!(entry.contains("Icon=/i/icon.png"));
+        assert!(entry.starts_with("[Desktop Entry]"));
+    }
+
+    #[test]
+    fn the_desktop_file_lands_in_the_applications_directory() {
+        assert_eq!(
+            desktop_file_path(std::path::Path::new("/home/h/.local/share/applications"), "Kerja"),
+            std::path::PathBuf::from(
+                "/home/h/.local/share/applications/claude-profiles-kerja.desktop"
+            )
+        );
+    }
+
+    #[test]
+    fn wayland_is_detected_from_the_session_type() {
+        assert!(is_wayland(Some("wayland")));
+        assert!(!is_wayland(Some("x11")));
+        assert!(!is_wayland(None));
     }
 
     #[test]
@@ -1626,7 +1689,7 @@ mod tests {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd src-tauri && cargo test linux`
-Expected: FAIL — `cannot find function focus_tool`.
+Expected: FAIL — `cannot find function slug`.
 
 Guard this module the same way as Task 8 (`#[cfg(any(target_os = "linux", test))]` for the pure helpers) so it is testable from the Mac.
 
@@ -1638,13 +1701,48 @@ use std::path::{Path, PathBuf};
 
 pub const BINARY_NAME: &str = "claude-desktop";
 
-pub fn focus_tool(available: &[&str]) -> Option<&'static str> {
-    for tool in ["wmctrl", "xdotool"] {
-        if available.contains(&tool) {
-            return Some(tool);
+pub fn slug(label: &str) -> String {
+    let mut out = String::new();
+    let mut pending_dash = false;
+    for c in label.chars() {
+        if c.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.extend(c.to_lowercase());
+        } else {
+            pending_dash = true;
         }
     }
-    None
+    out
+}
+
+pub fn wm_class(label: &str) -> String {
+    format!("claude-profiles-{}", slug(label))
+}
+
+pub fn desktop_file_path(applications_dir: &Path, label: &str) -> PathBuf {
+    applications_dir.join(format!("{}.desktop", wm_class(label)))
+}
+
+pub fn desktop_entry(label: &str, exec: &str, icon: &str) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Claude — {label}\n\
+         Comment=Claude Desktop, {label} profile\n\
+         Exec={exec}\n\
+         Icon={icon}\n\
+         Terminal=false\n\
+         Categories=Utility;\n\
+         StartupWMClass={class}\n",
+        class = wm_class(label)
+    )
+}
+
+pub fn is_wayland(session_type: Option<&str>) -> bool {
+    matches!(session_type, Some(s) if s.eq_ignore_ascii_case("wayland"))
 }
 
 pub fn data_root_from(xdg_config_home: Option<&str>, home: &str) -> PathBuf {
@@ -1682,41 +1780,85 @@ fn claude_binary(&self) -> Result<PathBuf> {
 
 `running_instances` calls `unix_ps::scan(&[BINARY_NAME])`. `link_shared_config` uses `std::os::unix::fs::symlink`, identical to macOS. `quit` calls `crate::platform::unix_signal_quit`. `default_profile_dir` returns `$HOME/.config/Claude`. `data_root` calls `data_root_from` with the real environment.
 
-`focus` builds on the tool probe:
+`extra_launch_args` supplies the class, and is the only backend that overrides it:
+
+```rust
+fn extra_launch_args(&self, profile: &Profile) -> Vec<String> {
+    vec![format!("--class={}", wm_class(&profile.label))]
+}
+```
+
+`focus` tries X11 and is honest on Wayland:
 
 ```rust
 fn focus(&self, pid: i32) -> Result<FocusOutcome> {
-    let available: Vec<&str> = ["wmctrl", "xdotool"]
-        .into_iter()
-        .filter(|t| which(t))
-        .collect();
-
-    let Some(tool) = focus_tool(&available) else {
+    if is_wayland(std::env::var("XDG_SESSION_TYPE").ok().as_deref()) {
         return Ok(FocusOutcome::Unsupported(
-            "focusing needs wmctrl or xdotool; on Wayland it may not work at all".into(),
+            "Wayland does not let one app raise another's window — \
+             use this profile's own entry in your taskbar or alt-tab".into(),
         ));
-    };
-
-    let status = match tool {
-        "wmctrl" => std::process::Command::new("wmctrl")
-            .args(["-ia", &format!("{pid}")])
-            .status(),
-        _ => std::process::Command::new("xdotool")
-            .args(["search", "--pid", &pid.to_string(), "windowactivate"])
-            .status(),
-    }?;
-
+    }
+    if !which("xdotool") {
+        return Ok(FocusOutcome::Unsupported(
+            "install xdotool to focus from here, or use this profile's taskbar entry".into(),
+        ));
+    }
+    let status = std::process::Command::new("xdotool")
+        .args(["search", "--pid", &pid.to_string(), "windowactivate"])
+        .status()?;
     if status.success() {
         Ok(FocusOutcome::Focused)
     } else {
         Ok(FocusOutcome::Unsupported(format!(
-            "{tool} could not raise the window for pid {pid}"
+            "xdotool could not raise the window for pid {pid}"
         )))
     }
 }
 ```
 
-`wmctrl -ia` takes a window id, not a pid; if the acceptance run in Step 5 shows it failing, drop `wmctrl` from the list and rely on `xdotool search --pid`, which does take a pid. Do not leave a call that silently never works.
+`wmctrl` is deliberately absent: its `-ia` flag takes a window id, not a pid, so it
+would have been a call that never worked. `xdotool search --pid` does take a pid.
+
+The desktop entries are written and removed alongside profiles. Add to this module:
+
+```rust
+pub fn applications_dir() -> Result<PathBuf> {
+    let home = std::env::var("HOME").map_err(|_| anyhow!("HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".local").join("share").join("applications"))
+}
+
+pub fn write_desktop_entry(label: &str, binary: &Path, icon: &Path) -> Result<()> {
+    let dir = applications_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    let exec = format!("{} --class={}", binary.display(), wm_class(label));
+    std::fs::write(
+        desktop_file_path(&dir, label),
+        desktop_entry(label, &exec, &icon.display().to_string()),
+    )?;
+    Ok(())
+}
+
+pub fn remove_desktop_entry(label: &str) -> Result<()> {
+    let path = desktop_file_path(&applications_dir()?, label);
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+```
+
+The `Exec` line intentionally omits `--user-data-dir`: launching from the taskbar
+entry should start the *Default* profile rather than silently spawning a second
+copy of a profile that may already be running, which Task 11's guard exists to
+prevent and which the desktop entry cannot check. The entry's job is identity and
+focus, not launching.
+
+Two trait methods carry this: add `fn register_identity(&self, profile: &Profile) -> Result<()>`
+and `fn unregister_identity(&self, profile: &Profile) -> Result<()>` to `Platform`,
+both defaulting to `Ok(())`, implemented only here. `commands::add_profile` and
+`rename_profile` call register; `delete_profile` calls unregister before removing
+the directory. Renaming must unregister the old label first, or a stale entry is
+left behind pointing at a class nothing uses.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1731,6 +1873,12 @@ On real Linux hardware with `claude-desktop` installed from Anthropic's apt repo
 2. Confirm `~/.config/Claude` is where the app actually stores its data. If it differs, correct `default_profile_dir`.
 3. `claude-desktop --user-data-dir=/tmp/cp-test` while another instance runs: confirm both stay alive. **If not, record the finding and degrade this backend to single-instance.**
 4. Note whether the session is X11 or Wayland (`echo $XDG_SESSION_TYPE`) and confirm the focus behaviour matches — focused on X11 with xdotool present, a clear "unsupported" message otherwise.
+5. **Confirm `--class` actually takes effect.** Launch a profile, then read the window's class:
+   - X11: `xprop WM_CLASS` and click the window — expect `claude-profiles-<slug>`.
+   - Wayland (GNOME): `gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell -m org.gnome.Shell.Eval 'global.get_window_actors().map(w => w.meta_window.get_wm_class())'`, or simply check whether the taskbar shows a separate, correctly-named entry.
+
+   **If `--class` is ignored, this whole approach collapses** — the instances stay indistinguishable and there is no focus story on Wayland at all. Record that finding plainly, keep the xdotool path for X11, and state the Wayland limitation in the README rather than papering over it.
+6. Confirm the generated `.desktop` file makes the taskbar show "Claude — <label>" with the Claude Profiles icon, and that deleting the profile removes the entry.
 
 - [ ] **Step 6: Commit**
 
@@ -1904,10 +2052,48 @@ mod tests {
         let p = Profile { path: d.path().join("gone"), ..profile(false) };
         assert!(prepare(&crate::shared_config::tests_support::FakePlatform, &p, &paths).is_err());
     }
+
+    #[test]
+    fn launching_a_profile_that_is_already_running_is_refused() {
+        use crate::shared_config::tests_support::FakePlatform;
+        let d = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::new(d.path());
+        let p = Profile { path: d.path().join("live"), ..profile(false) };
+        std::fs::create_dir_all(&p.path).unwrap();
+
+        let platform = FakePlatform::with_running(vec![crate::platform::RunningInstance {
+            pid: 4242,
+            user_data_dir: Some(p.path.clone()),
+        }]);
+
+        let err = launch(&platform, &p, &paths).unwrap_err().to_string();
+        assert!(err.contains("already running"), "got: {err}");
+        assert!(err.contains("4242"), "the error must name the pid, got: {err}");
+    }
 }
 ```
 
-Promote the `FakePlatform` from Task 4 into a `#[cfg(test)] pub mod tests_support` inside `shared_config.rs` so both test modules share one stand-in rather than defining it twice.
+Promote the `FakePlatform` from Task 4 into a `#[cfg(test)] pub mod tests_support` inside `shared_config.rs` so both test modules share one stand-in rather than defining it twice. Give it a running-instance list so this test can stage a live profile:
+
+```rust
+pub struct FakePlatform {
+    running: Vec<crate::platform::RunningInstance>,
+}
+
+impl FakePlatform {
+    pub fn with_running(running: Vec<crate::platform::RunningInstance>) -> Self {
+        Self { running }
+    }
+}
+
+impl Default for FakePlatform {
+    fn default() -> Self {
+        Self { running: vec![] }
+    }
+}
+```
+
+`running_instances` returns `Ok(self.running.clone())`, and `claude_binary` returns a path inside the test's temp directory that the test creates as an executable file, so `launch`'s preflight passes and the guard is what actually rejects. Update the Task 4 tests to construct it with `FakePlatform::default()`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1918,7 +2104,7 @@ Expected: FAIL — `cannot find function launch_args`.
 
 ```rust
 use crate::paths::Paths;
-use crate::platform::Platform;
+use crate::platform::{find_for, Platform};
 use crate::profile_store::Profile;
 use anyhow::{anyhow, Result};
 
@@ -1940,11 +2126,28 @@ pub fn prepare(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Res
     crate::shared_config::ensure_shared(platform, &profile.path, &paths.shared_config())
 }
 
+/// Refuses to spawn a second process against a user-data directory that already
+/// has one. Claude Desktop has NO single-instance lock (verified 2026-08-12): two
+/// processes on one profile both stay alive and corrupt its databases. The tray
+/// already offers Focus instead of Launch for a live profile, but a menu built
+/// seconds ago can be stale, so the check is repeated here, closest to the spawn.
 pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Result<i32> {
     let binary = platform.claude_binary()?;
+
+    let running = platform.running_instances().unwrap_or_default();
+    if let Some(pid) = find_for(&running, &profile.path, profile.is_default) {
+        return Err(anyhow!(
+            "{} is already running as pid {pid}; focus it instead of launching a second copy",
+            profile.label
+        ));
+    }
+
     prepare(platform, profile, paths)?;
+    let mut args = platform.extra_launch_args(profile);
+    args.extend(launch_args(profile)); // --user-data-dir stays last
+
     let child = std::process::Command::new(binary)
-        .args(launch_args(profile))
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -2407,6 +2610,8 @@ Spec coverage against `2026-08-12-claude-profiles-design.md`:
 | macOS paths, focus, quit | 7 |
 | Windows MSIX path probing, focus, quit | 8 |
 | Linux paths, focus degradation, quit | 9 |
+| Linux per-profile `--class` + `.desktop` identity | 2, 9, 11, 13 |
+| Launch refused when the profile is already running | 11 |
 | Unix `ps` parsing incl. helper exclusion | 5 |
 | Windows CSV parsing incl. spaces in paths | 6 |
 | Liveness survives an app restart | 5, 6, 12 (check 5) |
