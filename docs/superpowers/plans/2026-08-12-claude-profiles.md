@@ -55,17 +55,29 @@ src/
 - Consumes: nothing
 - Produces: a buildable Tauri v2 app named Claude Profiles with a tray icon; `cargo test` runs from `src-tauri/`
 
-- [ ] **Step 1: Install Rust**
+- [ ] **Step 1: Confirm the Rust toolchain**
 
-Rust is not installed on the development machine. Run:
+Rust is already installed on the development machine, managed by **mise**
+(`rust = "latest"` in `~/.config/mise/config.toml`, currently resolving to
+1.88.0). Do not install rustup — it would shadow the managed toolchain.
+
+The catch: mise's shims are added to `PATH` by the interactive shell profile, so
+a **non-interactive shell sees no `cargo` at all**. Every command in this plan
+that calls `cargo` or `pnpm tauri` must run with the shims on `PATH`:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
+export PATH="$HOME/.local/share/mise/shims:$PATH"
 cargo --version
 ```
 
-Expected: prints a cargo version.
+Expected: `cargo 1.88.0` or newer.
+
+If a dependency later refuses to build with an "requires rustc 1.x or newer"
+error, refresh the managed toolchain rather than side-loading another one:
+
+```bash
+mise use -g rust@latest
+```
 
 - [ ] **Step 2: Scaffold**
 
