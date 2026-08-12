@@ -215,11 +215,22 @@ pub mod tests_support {
     #[derive(Default)]
     pub struct FakePlatform {
         running: Vec<RunningInstance>,
+        scan_fails: bool,
     }
 
     impl FakePlatform {
         pub fn with_running(running: Vec<RunningInstance>) -> Self {
-            Self { running }
+            Self {
+                running,
+                scan_fails: false,
+            }
+        }
+
+        pub fn failing_scan() -> Self {
+            Self {
+                running: Vec::new(),
+                scan_fails: true,
+            }
         }
     }
 
@@ -234,6 +245,9 @@ pub mod tests_support {
             Ok(PathBuf::from("/fake/claude"))
         }
         fn running_instances(&self) -> anyhow::Result<Vec<RunningInstance>> {
+            if self.scan_fails {
+                anyhow::bail!("fake process scan failed")
+            }
             Ok(self.running.clone())
         }
         fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> anyhow::Result<()> {

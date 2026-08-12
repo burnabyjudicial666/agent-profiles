@@ -27,7 +27,18 @@ pub fn prepare(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Res
 /// already offers Focus instead of Launch for a live profile, but a menu built
 /// seconds ago can be stale, so the check is repeated here, closest to the spawn.
 pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Result<i32> {
-    let running = platform.running_instances().unwrap_or_default();
+    // Fail CLOSED. If the process scan itself fails we do not know whether this
+    // profile is live, and `unwrap_or_default()` would turn "I cannot tell" into
+    // "nothing is running" — launching straight into the corruption this guard
+    // exists to prevent. Refusing costs the user one retry; guessing costs them
+    // their profile.
+    let running = platform.running_instances().map_err(|error| {
+        anyhow!(
+            "could not check whether {} is already running ({error}); \
+             refusing to launch, because a second copy would corrupt the profile",
+            profile.label
+        )
+    })?;
     if let Some(pid) = find_for(&running, &profile.path, profile.is_default) {
         return Err(anyhow!(
             "{} is already running as pid {pid}; focus it instead of launching a second copy",
@@ -108,5 +119,21 @@ mod tests {
             err.contains("4242"),
             "the error must name the pid, got: {err}"
         );
+    }
+
+    #[test]
+    fn launching_is_refused_when_liveness_cannot_be_determined() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::new(d.path());
+        let p = Profile {
+            path: d.path().join("live"),
+            ..profile(false)
+        };
+        std::fs::create_dir_all(&p.path).unwrap();
+
+        let err = launch(&FakePlatform::failing_scan(), &p, &paths)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("could not check"), "got: {err}");
     }
 }
