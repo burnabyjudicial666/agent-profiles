@@ -1826,6 +1826,9 @@ mod tests {
         let entry = desktop_entry(&p, "/usr/bin/claude-desktop --class=x", "/i/icon.png");
         assert!(entry.contains("Name=Claude — Kerja"));
         assert!(entry.contains("StartupWMClass=claude-profiles-a1b2"));
+        // Metadata only: a launchable entry would start Claude against the
+        // Default profile without passing the liveness guard.
+        assert!(entry.contains("NoDisplay=true"));
         assert!(entry.contains("Icon=/i/icon.png"));
         assert!(entry.starts_with("[Desktop Entry]"));
     }
@@ -1894,6 +1897,7 @@ pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
          Icon={icon}\n\
          Terminal=false\n\
          Categories=Utility;\n\
+         NoDisplay=true\n\
          StartupWMClass={class}\n",
         label = profile.label,
         class = wm_class(&profile.id)
@@ -1903,6 +1907,20 @@ pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
 pub fn is_wayland(session_type: Option<&str>) -> bool {
     matches!(session_type, Some(s) if s.eq_ignore_ascii_case("wayland"))
 }
+```
+
+`NoDisplay=true` is load-bearing, not cosmetic. These entries exist so the desktop
+can match a window's `app_id`/`WM_CLASS` to a name and icon — they are metadata,
+not launchers. Their `Exec` carries `--class` but deliberately no
+`--user-data-dir`, so anything that actually ran them would start Claude against
+the **Default** profile's directory while wearing another profile's identity — and
+it would do so behind the tray's back, skipping the liveness guard entirely. Since
+Claude Desktop takes no single-instance lock, that is a direct route to the
+database corruption this design exists to prevent. Hiding the entries from menus
+and launchers keeps every real launch funnelled through `launch`, which checks
+first.
+
+```rust
 
 pub fn data_root_from(xdg_config_home: Option<&str>, home: &str) -> PathBuf {
     match xdg_config_home {
