@@ -1,4 +1,5 @@
 mod account;
+mod commands;
 mod instance_manager;
 mod paths;
 mod platform;
@@ -114,6 +115,13 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
 pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::list_profiles,
+            commands::add_profile,
+            commands::rename_profile,
+            commands::delete_profile,
+            commands::profile_size_bytes,
+        ])
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
             if let Err(error) = handle_menu_event(app, id) {
@@ -132,6 +140,9 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let platform = platform::current();
             let paths = paths::Paths::new(platform.data_root()?);
             let default_dir = platform.default_profile_dir()?;
