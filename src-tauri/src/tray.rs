@@ -182,14 +182,14 @@ pub(crate) fn rebuild_with_error(
         tray.set_menu(Some(menu))?;
     } else {
         let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray/tray-icon.png"))?;
-        let mut tray = tauri::tray::TrayIconBuilder::with_id("main")
+        let tray = tauri::tray::TrayIconBuilder::with_id("main")
             .icon(icon)
             .menu(&menu)
             .tooltip("Claude Profiles");
+        // Shadow rather than mutate: only macOS rebinds this, and a `mut` that no
+        // other platform uses is an error under `-D warnings` on Windows and Linux.
         #[cfg(target_os = "macos")]
-        {
-            tray = tray.icon_as_template(true);
-        }
+        let tray = tray.icon_as_template(true);
         tray.build(app)?;
     }
 

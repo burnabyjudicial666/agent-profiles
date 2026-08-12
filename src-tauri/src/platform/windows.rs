@@ -109,7 +109,10 @@ mod imp {
         }
 
         fn focus(&self, pid: i32, _profile_id: &str) -> Result<FocusOutcome> {
-            use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+            // `BOOL` lives in windows-core as of the 0.61 reshuffle; only the
+            // handle and message types stayed behind in Win32::Foundation.
+            use windows::core::BOOL;
+            use windows::Win32::Foundation::{HWND, LPARAM};
             use windows::Win32::UI::WindowsAndMessaging::{
                 EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
             };
