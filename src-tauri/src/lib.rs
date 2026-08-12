@@ -1,3 +1,4 @@
+mod account;
 mod paths;
 mod platform;
 mod profile_store;
