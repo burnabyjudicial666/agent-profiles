@@ -26,7 +26,8 @@
 
 ```
 src-tauri/src/
-  main.rs             # Tauri setup, tray wiring, command registration
+  main.rs             # thin binary shim; only calls claude_profiles_lib::run()
+  lib.rs              # Tauri setup, tray wiring, command registration, `mod` declarations
   platform/
     mod.rs            # Platform trait, RunningInstance, FocusOutcome, current()
     macos.rs
@@ -104,7 +105,7 @@ cargo add serde --features derive
 cargo add serde_json anyhow
 cargo add uuid --features v4
 cargo add --dev tempfile
-cargo add tauri --features tray-icon
+cargo add tauri --features tray-icon,image-png
 ```
 
 Then add the platform-gated ones by hand in `Cargo.toml`, taking the current
@@ -203,7 +204,7 @@ git commit -m "chore: scaffold Claude Profiles as a Tauri v2 tray app"
 
 **Files:**
 - Create: `src-tauri/src/platform/mod.rs`, `src-tauri/src/paths.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: nothing
@@ -300,7 +301,7 @@ mod tests {
 }
 ```
 
-Add `mod paths;` and `mod platform;` to `main.rs`.
+Add `mod paths;` and `mod platform;` to `lib.rs`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -422,7 +423,7 @@ git commit -m "feat: add platform trait seam and rooted paths"
 
 **Files:**
 - Create: `src-tauri/src/profile_store.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `paths::Paths`
@@ -435,7 +436,7 @@ git commit -m "feat: add platform trait seam and rooted paths"
   - `store.remove(id, paths) -> Result<()>` — refuses the Default profile
   - `store.set_account_uuid(id, Option<String>)`
 
-`load` takes the Default directory as a parameter rather than asking the platform, so it stays testable with a temp path.
+`load` takes the Default directory as a parameter rather than asking the platform, so it stays testable with a temp path. A missing `profiles.json` is a first run and seeds the Default profile without creating a backup. If an existing registry cannot be read or parsed, `load` moves it to `profiles.json.corrupt`, replacing any previous backup, before falling back to a freshly seeded store; this keeps profiles whose directories still exist recoverable after the next save.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -463,6 +464,7 @@ mod tests {
         assert!(store.list()[0].is_default);
         assert_eq!(store.list()[0].label, "Default");
         assert_eq!(store.list()[0].path, def);
+        assert!(!paths.profiles_json().with_extension("json.corrupt").exists());
     }
 
     #[test]
@@ -473,6 +475,24 @@ mod tests {
         let store = ProfileStore::load(&paths, &def).unwrap();
         assert_eq!(store.list().len(), 1);
         assert!(store.list()[0].is_default);
+    }
+
+    #[test]
+    fn a_corrupt_registry_is_preserved_before_falling_back_to_default() {
+        let (_d, paths, def) = fixture();
+        let corrupt_bytes = b"{ not json";
+        std::fs::create_dir_all(paths.profiles_json().parent().unwrap()).unwrap();
+        std::fs::write(&paths.profiles_json(), corrupt_bytes).unwrap();
+
+        let store = ProfileStore::load(&paths, &def).unwrap();
+
+        assert_eq!(store.list().len(), 1);
+        assert!(store.list()[0].is_default);
+        assert!(!paths.profiles_json().exists());
+        assert_eq!(
+            std::fs::read(paths.profiles_json().with_extension("json.corrupt")).unwrap(),
+            corrupt_bytes
+        );
     }
 
     #[test]
@@ -523,7 +543,7 @@ mod tests {
 }
 ```
 
-Add `mod profile_store;` to `main.rs`.
+Add `mod profile_store;` to `lib.rs`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -555,10 +575,21 @@ pub struct ProfileStore {
 
 impl ProfileStore {
     pub fn load(paths: &Paths, default_dir: &Path) -> Result<Self> {
-        let mut store = std::fs::read_to_string(paths.profiles_json())
-            .ok()
-            .and_then(|raw| serde_json::from_str::<ProfileStore>(&raw).ok())
-            .unwrap_or_default();
+        let file = paths.profiles_json();
+        let mut store = match std::fs::read(&file) {
+            Ok(raw) => match serde_json::from_slice::<ProfileStore>(&raw) {
+                Ok(store) => store,
+                Err(_) => {
+                    preserve_corrupt_registry(&file)?;
+                    Self::default()
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(_) => {
+                preserve_corrupt_registry(&file)?;
+                Self::default()
+            }
+        };
 
         if !store.profiles.iter().any(|p| p.is_default) {
             store.profiles.insert(
@@ -639,17 +670,28 @@ impl ProfileStore {
         }
     }
 }
+
+fn preserve_corrupt_registry(file: &Path) -> Result<()> {
+    let corrupt = file.with_extension("json.corrupt");
+    match std::fs::remove_file(&corrupt) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    std::fs::rename(file, corrupt)?;
+    Ok(())
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test profile_store`
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/profile_store.rs src-tauri/src/main.rs
+git add src-tauri/src/profile_store.rs src-tauri/src/lib.rs
 git commit -m "feat: add profile registry with Default profile seeding"
 ```
 
@@ -659,7 +701,7 @@ git commit -m "feat: add profile registry with Default profile seeding"
 
 **Files:**
 - Create: `src-tauri/src/shared_config.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `paths::CONFIG_FILENAME`, `platform::Platform`
@@ -787,7 +829,7 @@ pub mod tests_support {
 `RunningInstance` must derive `Clone` for this, which Task 2 already specifies.
 Import it in the test module with `use crate::shared_config::tests_support::FakePlatform;`.
 
-Add `mod shared_config;` to `main.rs`.
+Add `mod shared_config;` to `lib.rs`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -829,7 +871,17 @@ pub fn ensure_shared(platform: &dyn Platform, profile_dir: &Path, shared: &Path)
         }
         LinkState::AdoptFile(contents) => {
             create_parent(shared)?;
-            std::fs::write(shared, contents)?;
+            // Adopt ONLY into an empty slot. Once a shared config exists it is the
+            // single source of truth for every profile, and a newly-added profile
+            // carrying its own file must not overwrite it — that would silently
+            // destroy the MCP servers every other profile is already using. The
+            // displaced file is kept beside the profile so nothing is lost.
+            if shared.exists() {
+                let displaced = link.with_extension("json.replaced");
+                std::fs::rename(&link, &displaced)?;
+            } else {
+                std::fs::write(shared, contents)?;
+            }
         }
         LinkState::CreateFresh => write_shared_if_absent(shared)?,
     }
@@ -868,18 +920,40 @@ fn is_same_file(link: &Path, shared: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        // Two hardlinks to one file report the same length and creation time; the
-        // authoritative check needs GetFileInformationByHandle. Compare the cheap
-        // signals and let a false negative simply re-link, which is harmless.
-        match (std::fs::metadata(link), std::fs::metadata(shared)) {
-            (Ok(a), Ok(b)) => a.len() == b.len() && a.created().ok() == b.created().ok(),
+        // Compare the volume serial + file index, which is what actually identifies
+        // a file on Windows. Length-and-creation-time was considered and rejected:
+        // two freshly written `{}` files share both, so it reports "already linked"
+        // for a profile that is not linked at all, leaving it silently unshared.
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        fn identity(path: &Path) -> Option<(u32, u32, u32)> {
+            let file = std::fs::File::open(path).ok()?;
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            unsafe {
+                GetFileInformationByHandle(HANDLE(file.as_raw_handle() as _), &mut info).ok()?;
+            }
+            Some((
+                info.dwVolumeSerialNumber,
+                info.nFileIndexHigh,
+                info.nFileIndexLow,
+            ))
+        }
+
+        match (identity(link), identity(shared)) {
+            (Some(a), Some(b)) => a == b,
             _ => false,
         }
     }
 }
 ```
 
-The `is_same_file` comparison is the one place where a wrong answer is cheap: a false negative re-creates a correct link, a false positive is impossible for distinct files created at different times. The Windows backend (Task 8) may replace it with `GetFileInformationByHandle` if the heuristic proves flaky in its acceptance run.
+A false negative from `is_same_file` is cheap — it re-creates a link that was already correct. A false positive is not: the profile is reported as linked, the link is never created, and that profile quietly keeps a private config while the user believes it is shared. Both branches therefore compare real file identity (inode on Unix, volume serial + file index on Windows) rather than any metadata heuristic.
+
+The Windows branch needs the `Win32_Storage_FileSystem` feature on the `windows` crate; add it in Task 8 if it is not already present.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -889,7 +963,7 @@ Expected: 5 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/shared_config.rs src-tauri/src/main.rs
+git add src-tauri/src/shared_config.rs src-tauri/src/lib.rs
 git commit -m "feat: share claude_desktop_config.json across profiles"
 ```
 
@@ -926,6 +1000,7 @@ mod tests {
         "  503 /Applications/Claude.app/Contents/MacOS/Claude\n",
         "  504 /usr/bin/unrelated --user-data-dir=/p/work\n",
         "  505 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/p/work2\n",
+        "  506 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/Users/h/Library/Application Support/Claude Profiles/profiles/abc\n",
     );
 
     const LINUX_FIXTURE: &str = concat!(
@@ -937,7 +1012,18 @@ mod tests {
     #[test]
     fn only_main_processes_are_returned() {
         let pids: Vec<i32> = parse(MAC_FIXTURE, &[MAC]).iter().map(|i| i.pid).collect();
-        assert_eq!(pids, vec![501, 503, 505]);
+        assert_eq!(pids, vec![501, 503, 505, 506]);
+    }
+
+    #[test]
+    fn a_user_data_dir_containing_spaces_is_captured_whole() {
+        let found = parse(MAC_FIXTURE, &[MAC]);
+        assert_eq!(
+            found.last().unwrap().user_data_dir,
+            Some(PathBuf::from(
+                "/Users/h/Library/Application Support/Claude Profiles/profiles/abc"
+            ))
+        );
     }
 
     #[test]
@@ -992,9 +1078,18 @@ pub fn parse(raw: &str, main_binaries: &[&str]) -> Vec<RunningInstance> {
                 return None;
             }
 
+            // Take the rest of the line, NOT the next whitespace-delimited token.
+            // On macOS every profile lives under "Application Support/Claude
+            // Profiles", so the path always contains spaces; splitting on
+            // whitespace truncates it to "/Users/h/Library/Application" and the
+            // liveness match then silently fails — which permits the double
+            // launch this whole design exists to prevent. `--user-data-dir` is
+            // always the last argument we pass (see `launch`), so the remainder
+            // of the line is exactly the path.
             let user_data_dir = args
-                .split_whitespace()
-                .find_map(|a| a.strip_prefix(FLAG))
+                .find(FLAG)
+                .map(|at| args[at + FLAG.len()..].trim_end())
+                .filter(|rest| !rest.is_empty())
                 .map(PathBuf::from);
 
             Some(RunningInstance { pid, user_data_dir })
@@ -1361,7 +1456,7 @@ Expected: 3 passed, and `cargo build` succeeds.
 
 Cannot be automated. With Claude Desktop installed:
 
-1. `ps -axo pid=,args= | grep "MacOS/Claude" | grep -v -- "--type="` with the app running prints exactly one line.
+1. `ps -axo pid=,args= | grep '[M]acOS/Claude' | grep -v -- "--type="` with the app running prints exactly one line. The bracket expression avoids counting the grep process itself.
 2. Launch two instances by hand with distinct `--user-data-dir` values and confirm both stay alive — this is the parallel-instance guarantee.
 
 - [ ] **Step 6: Commit**
@@ -1620,6 +1715,8 @@ The `windows` crate's exact type names (`BOOL` vs `windows::core::BOOL`) shift b
 
 `quit` sleeps a flat 10 seconds before the forced kill rather than polling, because checking liveness on Windows needs another API round trip; the tray runs it on a worker thread so the delay is invisible.
 
+Residual risk to confirm on real hardware: because the sleep is unconditional, the forced `taskkill /F` fires even when the process already exited cleanly. Windows recycles process ids aggressively, so in principle that second call could land on an unrelated process that inherited the id within those ten seconds. The acceptance run should check that quitting an instance leaves every other running instance alive. If it turns out to be a real hazard, replace the flat sleep with a poll on `OpenProcess` + `GetExitCodeProcess` and skip the force kill once the process is gone.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test windows`
@@ -1729,6 +1826,9 @@ mod tests {
         let entry = desktop_entry(&p, "/usr/bin/claude-desktop --class=x", "/i/icon.png");
         assert!(entry.contains("Name=Claude — Kerja"));
         assert!(entry.contains("StartupWMClass=claude-profiles-a1b2"));
+        // Metadata only: a launchable entry would start Claude against the
+        // Default profile without passing the liveness guard.
+        assert!(entry.contains("NoDisplay=true"));
         assert!(entry.contains("Icon=/i/icon.png"));
         assert!(entry.starts_with("[Desktop Entry]"));
     }
@@ -1797,6 +1897,7 @@ pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
          Icon={icon}\n\
          Terminal=false\n\
          Categories=Utility;\n\
+         NoDisplay=true\n\
          StartupWMClass={class}\n",
         label = profile.label,
         class = wm_class(&profile.id)
@@ -1806,6 +1907,20 @@ pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
 pub fn is_wayland(session_type: Option<&str>) -> bool {
     matches!(session_type, Some(s) if s.eq_ignore_ascii_case("wayland"))
 }
+```
+
+`NoDisplay=true` is load-bearing, not cosmetic. These entries exist so the desktop
+can match a window's `app_id`/`WM_CLASS` to a name and icon — they are metadata,
+not launchers. Their `Exec` carries `--class` but deliberately no
+`--user-data-dir`, so anything that actually ran them would start Claude against
+the **Default** profile's directory while wearing another profile's identity — and
+it would do so behind the tray's back, skipping the liveness guard entirely. Since
+Claude Desktop takes no single-instance lock, that is a direct route to the
+database corruption this design exists to prevent. Hiding the entries from menus
+and launchers keeps every real launch funnelled through `launch`, which checks
+first.
+
+```rust
 
 pub fn data_root_from(xdg_config_home: Option<&str>, home: &str) -> PathBuf {
     match xdg_config_home {
@@ -1893,19 +2008,19 @@ pub fn applications_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local").join("share").join("applications"))
 }
 
-pub fn write_desktop_entry(label: &str, binary: &Path, icon: &Path) -> Result<()> {
+pub fn write_desktop_entry(profile: &Profile, binary: &Path, icon: &Path) -> Result<()> {
     let dir = applications_dir()?;
     std::fs::create_dir_all(&dir)?;
-    let exec = format!("{} --class={}", binary.display(), wm_class(label));
+    let exec = format!("{} --class={}", binary.display(), wm_class(&profile.id));
     std::fs::write(
-        desktop_file_path(&dir, label),
-        desktop_entry(label, &exec, &icon.display().to_string()),
+        desktop_file_path(&dir, &profile.id),
+        desktop_entry(profile, &exec, &icon.display().to_string()),
     )?;
     Ok(())
 }
 
-pub fn remove_desktop_entry(label: &str) -> Result<()> {
-    let path = desktop_file_path(&applications_dir()?, label);
+pub fn remove_desktop_entry(profile_id: &str) -> Result<()> {
+    let path = desktop_file_path(&applications_dir()?, profile_id);
     if path.exists() {
         std::fs::remove_file(path)?;
     }
@@ -1959,7 +2074,7 @@ git commit -m "feat: Linux platform backend with honest focus degradation"
 
 **Files:**
 - Create: `src-tauri/src/account.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `profile_store::Profile`
@@ -2061,7 +2176,7 @@ Expected: 3 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/account.rs src-tauri/src/main.rs
+git add src-tauri/src/account.rs src-tauri/src/lib.rs
 git commit -m "feat: flag profiles signed in to the same account"
 ```
 
@@ -2071,7 +2186,7 @@ git commit -m "feat: flag profiles signed in to the same account"
 
 **Files:**
 - Create: `src-tauri/src/instance_manager.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `platform::Platform`, `profile_store::Profile`, `paths::Paths`, `shared_config`
@@ -2136,11 +2251,23 @@ mod tests {
         assert!(err.contains("already running"), "got: {err}");
         assert!(err.contains("4242"), "the error must name the pid, got: {err}");
     }
+
+    #[test]
+    fn launching_is_refused_when_liveness_cannot_be_determined() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::new(d.path());
+        let p = Profile { path: d.path().join("live"), ..profile(false) };
+        std::fs::create_dir_all(&p.path).unwrap();
+
+        let err = launch(&FakePlatform::failing_scan(), &p, &paths).unwrap_err().to_string();
+        assert!(err.contains("could not check"), "got: {err}");
+    }
 }
 ```
 
-`FakePlatform` comes from Task 4's `tests_support` module unchanged; nothing new is
-needed here.
+`FakePlatform` comes from Task 4's `tests_support` module and needs one addition: a
+`failing_scan()` constructor plus a `scan_fails: bool` field, so `running_instances`
+can return `Err` on demand. Everything else about the fixture stays as it is.
 
 The last test only passes if `launch` checks liveness **before** anything that can
 fail for an unrelated reason. Order matters and is asserted by the test: the guard
@@ -2184,7 +2311,18 @@ pub fn prepare(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Res
 /// already offers Focus instead of Launch for a live profile, but a menu built
 /// seconds ago can be stale, so the check is repeated here, closest to the spawn.
 pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Result<i32> {
-    let running = platform.running_instances().unwrap_or_default();
+    // Fail CLOSED. If the process scan itself fails we do not know whether this
+    // profile is live, and `unwrap_or_default()` would turn "I cannot tell" into
+    // "nothing is running" — launching straight into the corruption this guard
+    // exists to prevent. Refusing costs the user one retry; guessing costs them
+    // their profile.
+    let running = platform.running_instances().map_err(|error| {
+        anyhow!(
+            "could not check whether {} is already running ({error}); \
+             refusing to launch, because a second copy would corrupt the profile",
+            profile.label
+        )
+    })?;
     if let Some(pid) = find_for(&running, &profile.path, profile.is_default) {
         return Err(anyhow!(
             "{} is already running as pid {pid}; focus it instead of launching a second copy",
@@ -2210,12 +2348,12 @@ pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Resu
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test instance_manager`
-Expected: 4 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/instance_manager.rs src-tauri/src/shared_config.rs src-tauri/src/main.rs
+git add src-tauri/src/instance_manager.rs src-tauri/src/shared_config.rs src-tauri/src/lib.rs
 git commit -m "feat: compose launch from platform backend and shared config"
 ```
 
@@ -2225,7 +2363,7 @@ git commit -m "feat: compose launch from platform backend and shared config"
 
 **Files:**
 - Create: `src-tauri/src/tray.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: everything above
@@ -2416,22 +2554,24 @@ Append `rebuild(app: &tauri::AppHandle) -> Result<()>`. It must:
 
 1. Read `AppState` from `app.state()`.
 2. Refresh account uuids: for each profile, `account::read_account_uuid(&p.path)` → `store.set_account_uuid(...)`, then `store.save(&paths)`, ignoring save errors.
-3. `platform.running_instances()` — on error, treat as an empty list rather than failing the rebuild.
-4. `platform.claude_binary()` — capture `Err(e)` as `Some(e.to_string())` for `binary_error`.
+3. `platform.running_instances()` — on error, use an empty list so rebuild can continue, and add a disabled visible reason row explaining the scan failure.
+4. `platform.claude_binary()` — capture `Err(e)` as `Some(e.to_string())` for `binary_error`; all runtime errors are likewise surfaced as disabled visible reason rows during the rebuild.
 5. Build a `tauri::menu::Menu` from `menu_rows` with `MenuItem::with_id(app, &row.id, &row.text, row.enabled, None::<&str>)`; append a separator, then `manage` / "Manage Profiles…" and `quit_app` / "Quit Claude Profiles".
 6. Attach with `TrayIconBuilder::with_id("main").menu(&menu).build(app)` on first construction, or `tray.set_menu(Some(menu))` on later rebuilds.
 
-In `main.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
+In `lib.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
 
 - `launch:<id>` → `instance_manager::launch`, then `rebuild`
-- `focus:<id>` → re-scan, `find_for`, `platform.focus(pid, &profile.id)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild so the row can show the message
-- `quit:<id>` → re-scan, then spawn a thread running `platform.quit(pid)` followed by `rebuild` (it blocks up to 10s and must not stall the tray)
+- `focus:<id>` → re-scan, `find_for`, `platform.focus(pid, &profile.id)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild with a disabled visible reason row carrying the message
+- `quit:<id>` → re-scan, then use fallible `std::thread::Builder::spawn` for a worker running `platform.quit(pid)` followed by `rebuild` (it blocks up to 10s and must not stall the tray); log thread-creation failures and best-effort rebuild with a disabled visible reason row
 - `manage` → show the management window (Task 13)
 - `quit_app` → `app.exit(0)`
 
-Every handler wraps its work in a closure returning `Result<()>`; on `Err`, log and rebuild rather than panicking.
+Every handler wraps its work in a closure returning `Result<()>`; on `Err`, log and rebuild with a disabled visible reason row rather than panicking. The pure `menu_rows` contract remains unchanged; rebuild-only runtime and scan errors are supplied as an additional reason to the rebuild layer.
 
-Also call `rebuild` from a `TrayIconEvent` handler so the menu refreshes each time it opens, and once during `setup`.
+Also call `rebuild` from a `TrayIconEvent` handler so the menu refreshes each time it opens, and once during `setup`. **Match on the event and rebuild only for `TrayIconEvent::Click`** — the handler also receives `Enter`, `Move` and `Leave`, and `Move` fires continuously while the pointer crosses the icon. Rebuilding on every one of those would run a full process scan and rewrite `profiles.json` dozens of times per second, for a menu nobody opened.
+
+For the same reason `rebuild` must not write the registry unconditionally. It refreshes each profile's account uuid before drawing, but should call `store.save` only when a uuid actually changed; otherwise every glance at the tray becomes a disk write.
 
 Add one more function beside it, and call it from `setup` **before** the first
 rebuild:
@@ -2481,7 +2621,7 @@ git commit -m "feat: tray menu with live instance state"
 
 **Files:**
 - Create: `src-tauri/src/commands.rs`
-- Modify: `src-tauri/src/main.rs`, `src/index.html`, `src/main.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`
+- Modify: `src-tauri/src/lib.rs`, `src/index.html`, `src/main.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`
 
 **Interfaces:**
 - Consumes: `AppState`, `profile_store`, `account`, `platform`
@@ -2665,41 +2805,32 @@ Expected: every test from Tasks 2–13 passes. Report the actual count.
 
 - [ ] **Step 2: Cross-compile check**
 
+On a development machine where the targets are already installed, run:
+
 ```bash
+export PATH="$HOME/.local/share/mise/shims:$PATH"
 cd src-tauri
-rustup target add x86_64-pc-windows-msvc aarch64-unknown-linux-gnu
 cargo check --target x86_64-pc-windows-msvc
 cargo check --target aarch64-unknown-linux-gnu
 ```
 
-Linking will not succeed without each platform's toolchain, but `cargo check` catches the type errors that matter — wrong `windows` crate names, missing `cfg` guards, a backend that does not satisfy the trait. If a target's system libraries are unavailable, record that and rely on the acceptance runs instead. Do not silently skip.
+Do not install rustup, Rust targets, or platform toolchains as part of this task. On a Mac without those targets, `cargo check` is still attempted and its missing-target error is recorded in the README. Linking will not succeed without each platform's toolchain, but an available target check catches the type errors that matter — wrong `windows` crate names, missing `cfg` guards, and a backend that does not satisfy the trait. Do not silently skip an attempted check.
 
 - [ ] **Step 3: Run the Windows acceptance checklist**
 
-Execute every step of Task 8 Step 5 on real Windows hardware and record the outcomes in the README's "Platform status" table. If parallel instances turn out to be impossible, say so plainly there.
+Execute every step of Task 8 Step 5 on real Windows hardware when it is available, and record the outcomes in the README's "Platform status" table. If no Windows machine is available for this run, record the backend as unverified and identify the human-run checklist that remains. If parallel instances turn out to be impossible, say so plainly there.
 
 - [ ] **Step 4: Run the Linux acceptance checklist**
 
-Execute every step of Task 9 Step 5 on real Linux hardware and record the outcomes, including whether the session was X11 or Wayland and whether focusing worked.
+Execute every step of Task 9 Step 5 on real Linux hardware when it is available, and record the outcomes, including whether the session was X11 or Wayland and whether focusing worked. If no Linux machine is available for this run, record the backend as unverified and identify the human-run checklist that remains.
 
 - [ ] **Step 5: Verify the missing-binary path**
 
-On the development machine:
-
-```bash
-sudo mv /Applications/Claude.app /Applications/Claude.app.bak
-```
-
-Open the menu. Expected: every profile row greyed out plus a row naming the path that was probed; no crash. Then:
-
-```bash
-sudo mv /Applications/Claude.app.bak /Applications/Claude.app
-```
+Do not temporarily move the installed Claude Desktop application from `/Applications` in an automated run: that modifies the user's installation and requires privileged access. The existing macOS unit test covers rejection of a missing or non-executable binary. A human may run the original move-and-restore check on a disposable installation if they want the tray presentation verified; record it separately from the unit-test result.
 
 - [ ] **Step 6: Verify the duplicate-account warning**
 
-Launch Default and sign in. Add a profile "Copy", launch it, sign in with the **same** account. Reopen the menu.
-Expected: both rows carry "(same account)". Sign the second one out afterwards.
+This check requires two real signed-in profiles and interactive account access. Do not launch the real Default profile or sign in on behalf of the user in an automated run. A human may add a second profile, sign in to the same account, confirm both rows carry "(same account)", and sign the second one out afterwards; until then, record the end-to-end warning as unverified.
 
 - [ ] **Step 7: Write the README**
 
