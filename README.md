@@ -21,15 +21,43 @@ If a profile has an existing regular configuration file, its contents are adopte
 
 ## Platform status
 
-Status below is a verification record as of **2026-08-13**. A source-level test is not a substitute for live acceptance on the target operating system.
+Verification record as of **2026-08-13**. Every unit test in this repository runs on macOS, including the Windows and Linux ones — they exercise parsing and path logic against fixtures, not a real operating system. **A passing unit test is not acceptance.** An unchecked box below means the behavior has never been observed on real hardware, not that it is known to be broken.
 
-| Platform | Verified | Not yet verified / owner of follow-up |
-| --- | --- | --- |
-| **macOS** | The Rust suite passes on macOS (59 tests). The Claude Desktop binary/path checks and macOS process-parser tests pass. Parallel Claude Desktop processes were launched directly twice with distinct `--user-data-dir` values and both stayed alive. | The Claude Profiles UI/tray acceptance is still awaiting a human-run macOS check. In particular, the Manage Profiles tray item showing and focusing the hidden window, a new profile appearing in the tray immediately, launching a second profile alongside Default and keeping both usable through the app, refusing deletion while that profile runs, and showing the directory size in the delete confirmation remain unverified. The prior attempt could not drive the UI because macOS Accessibility/Assistive Access permission must be granted by a human. |
-| **Windows** | Windows CSV process parsing and MSIX/classic path-picker logic are covered by unit tests run on macOS. The Windows target check was attempted. | Live Windows acceptance is unverified: process shape, parallel instances, MSIX default-directory selection, hardlink creation, focus, quit, and end-to-end launch behavior all need a human-run check on Windows. `cargo check --target x86_64-pc-windows-msvc` could not run to completion because the target is not installed on this Mac (`can't find crate for core`). |
-| **Linux** | Linux desktop-identity helpers, profile-id-based classes and filenames, `.desktop` metadata, and Wayland detection are covered by unit tests run on macOS. The Linux target check was attempted. | Live Linux acceptance is unverified: the real `claude-desktop` process shape, default data path, parallel instances, `--class` behavior, generated taskbar identity, X11 focus, Wayland behavior, symlink creation, and quit flow all need a human-run check on Linux. `cargo check --target aarch64-unknown-linux-gnu` could not run to completion because the target is not installed on this Mac (`can't find crate for std`). |
+The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
-The cross-target checks were attempted without installing rustup or any Rust targets. The live Windows and Linux checklists remain open rather than being inferred from the unit tests.
+### macOS — partially verified
+
+- [x] Rust suite passes, including the Claude Desktop binary and path checks
+- [x] Two Claude Desktop processes launched directly with distinct `--user-data-dir` values both stayed alive (this is the premise the whole app rests on)
+- [ ] Management window opens from the tray, and closing it no longer quits the app
+- [ ] Rename and delete work from the management window
+- [ ] Tray liveness marker updates after quitting Claude Desktop by hand
+- [ ] A newly added profile appears in the tray immediately
+- [ ] A second profile launches alongside Default and both stay usable through the app
+- [ ] Deletion is refused while that profile is running
+- [ ] The delete confirmation shows the directory size
+
+Automated UI driving was not possible: macOS Accessibility permission has to be granted by a human, so the open boxes need a person.
+
+### Windows — never compiled or run
+
+- [x] CSV process parsing and MSIX/classic path-picker logic covered by unit tests (run on macOS)
+- [ ] **The Windows target has never been compiled.** `cargo check --target x86_64-pc-windows-msvc` cannot run on this machine (`can't find crate for core`)
+- [ ] Real process shape of the installed Claude Desktop
+- [ ] MSIX vs classic default-directory selection against a real installation
+- [ ] Hardlink creation for the shared MCP config
+- [ ] Parallel instances, focus, quit, end-to-end launch
+
+### Linux — never compiled or run
+
+- [x] Desktop-identity helpers, profile-id classes and filenames, `.desktop` metadata, and Wayland detection covered by unit tests (run on macOS)
+- [ ] **The Linux target has never been compiled.** `cargo check --target aarch64-unknown-linux-gnu` cannot run on this machine (`can't find crate for std`)
+- [ ] Real `claude-desktop` process shape and default data path
+- [ ] Per-profile `--class` producing a distinct taskbar identity
+- [ ] X11 focus via `xdotool`, and the Wayland limitation path
+- [ ] Symlink creation, parallel instances, quit flow
+
+Contributions running Windows or Linux are especially welcome — checking one of those boxes with a real report is more valuable than any further test written on macOS.
 
 ## Linux and Wayland focus limitation
 
