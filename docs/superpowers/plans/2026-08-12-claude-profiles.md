@@ -2805,41 +2805,32 @@ Expected: every test from Tasks 2–13 passes. Report the actual count.
 
 - [ ] **Step 2: Cross-compile check**
 
+On a development machine where the targets are already installed, run:
+
 ```bash
+export PATH="$HOME/.local/share/mise/shims:$PATH"
 cd src-tauri
-rustup target add x86_64-pc-windows-msvc aarch64-unknown-linux-gnu
 cargo check --target x86_64-pc-windows-msvc
 cargo check --target aarch64-unknown-linux-gnu
 ```
 
-Linking will not succeed without each platform's toolchain, but `cargo check` catches the type errors that matter — wrong `windows` crate names, missing `cfg` guards, a backend that does not satisfy the trait. If a target's system libraries are unavailable, record that and rely on the acceptance runs instead. Do not silently skip.
+Do not install rustup, Rust targets, or platform toolchains as part of this task. On a Mac without those targets, `cargo check` is still attempted and its missing-target error is recorded in the README. Linking will not succeed without each platform's toolchain, but an available target check catches the type errors that matter — wrong `windows` crate names, missing `cfg` guards, and a backend that does not satisfy the trait. Do not silently skip an attempted check.
 
 - [ ] **Step 3: Run the Windows acceptance checklist**
 
-Execute every step of Task 8 Step 5 on real Windows hardware and record the outcomes in the README's "Platform status" table. If parallel instances turn out to be impossible, say so plainly there.
+Execute every step of Task 8 Step 5 on real Windows hardware when it is available, and record the outcomes in the README's "Platform status" table. If no Windows machine is available for this run, record the backend as unverified and identify the human-run checklist that remains. If parallel instances turn out to be impossible, say so plainly there.
 
 - [ ] **Step 4: Run the Linux acceptance checklist**
 
-Execute every step of Task 9 Step 5 on real Linux hardware and record the outcomes, including whether the session was X11 or Wayland and whether focusing worked.
+Execute every step of Task 9 Step 5 on real Linux hardware when it is available, and record the outcomes, including whether the session was X11 or Wayland and whether focusing worked. If no Linux machine is available for this run, record the backend as unverified and identify the human-run checklist that remains.
 
 - [ ] **Step 5: Verify the missing-binary path**
 
-On the development machine:
-
-```bash
-sudo mv /Applications/Claude.app /Applications/Claude.app.bak
-```
-
-Open the menu. Expected: every profile row greyed out plus a row naming the path that was probed; no crash. Then:
-
-```bash
-sudo mv /Applications/Claude.app.bak /Applications/Claude.app
-```
+Do not temporarily move the installed Claude Desktop application from `/Applications` in an automated run: that modifies the user's installation and requires privileged access. The existing macOS unit test covers rejection of a missing or non-executable binary. A human may run the original move-and-restore check on a disposable installation if they want the tray presentation verified; record it separately from the unit-test result.
 
 - [ ] **Step 6: Verify the duplicate-account warning**
 
-Launch Default and sign in. Add a profile "Copy", launch it, sign in with the **same** account. Reopen the menu.
-Expected: both rows carry "(same account)". Sign the second one out afterwards.
+This check requires two real signed-in profiles and interactive account access. Do not launch the real Default profile or sign in on behalf of the user in an automated run. A human may add a second profile, sign in to the same account, confirm both rows carry "(same account)", and sign the second one out afterwards; until then, record the end-to-end warning as unverified.
 
 - [ ] **Step 7: Write the README**
 
