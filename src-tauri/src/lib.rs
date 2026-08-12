@@ -1,4 +1,5 @@
 mod account;
+mod instance_manager;
 mod paths;
 mod platform;
 mod profile_store;
