@@ -8,7 +8,7 @@ pub mod win_proc;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 mod windows;
 
 #[derive(Debug, Clone, PartialEq)]
