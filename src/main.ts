@@ -84,25 +84,122 @@ function render(profiles: ProfileView[]): void {
 
     const actions = document.createElement("div");
     actions.className = "profile-actions";
-    if (!profile.is_default) {
-      const renameButton = document.createElement("button");
-      renameButton.className = "button button-quiet";
-      renameButton.type = "button";
-      renameButton.textContent = "Rename";
-      renameButton.addEventListener("click", () => renameProfile(profile));
-      actions.append(renameButton);
 
+    const renameButton = document.createElement("button");
+    renameButton.className = "button button-quiet";
+    renameButton.type = "button";
+    renameButton.textContent = "Rename";
+    renameButton.addEventListener("click", () => startRename(profile, content));
+    actions.append(renameButton);
+
+    // The Default profile is the existing Claude Desktop installation, so its
+    // directory is never ours to delete. Its label is still just a label.
+    if (!profile.is_default) {
       const deleteButton = document.createElement("button");
       deleteButton.className = "button button-danger";
       deleteButton.type = "button";
       deleteButton.textContent = "Delete";
-      deleteButton.addEventListener("click", () => deleteProfile(profile));
+      deleteButton.addEventListener("click", () => startDelete(profile, content));
       actions.append(deleteButton);
     }
 
     item.append(index, content, actions);
     profilesList.append(item);
   }
+}
+
+/// Rename and delete both used to call `window.prompt` / `window.confirm`.
+/// Tauri's webview does not implement either one, so both actions silently did
+/// nothing. Everything below is drawn in the page instead.
+function startRename(profile: ProfileView, content: HTMLElement): void {
+  if (content.querySelector(".inline-panel")) return;
+
+  const panel = document.createElement("form");
+  panel.className = "inline-panel";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 80;
+  input.value = profile.label;
+  input.setAttribute("aria-label", `New label for ${profile.label}`);
+
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "button button-primary";
+  save.textContent = "Save";
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "button button-quiet";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => panel.remove());
+
+  panel.append(input, save, cancel);
+  panel.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const label = input.value.trim();
+    if (!label || label === profile.label) {
+      panel.remove();
+      return;
+    }
+    try {
+      await invoke("rename_profile", { id: profile.id, label });
+      clearError();
+      await loadProfiles();
+    } catch (error) {
+      showError(error);
+    }
+  });
+
+  content.append(panel);
+  input.focus();
+  input.select();
+}
+
+async function startDelete(profile: ProfileView, content: HTMLElement): Promise<void> {
+  if (content.querySelector(".inline-panel")) return;
+
+  let size: number;
+  try {
+    size = await invoke<number>("profile_size_bytes", { id: profile.id });
+  } catch (error) {
+    showError(error);
+    return;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "inline-panel inline-panel-danger";
+  panel.append(
+    makeTextElement(
+      "p",
+      "helper",
+      `Delete “${profile.label}” and all ${formatBytes(size)} in ${profile.path}? This cannot be undone.`,
+    ),
+  );
+
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "button button-danger";
+  confirm.textContent = "Delete permanently";
+  confirm.addEventListener("click", async () => {
+    try {
+      await invoke("delete_profile", { id: profile.id });
+      clearError();
+      await loadProfiles();
+    } catch (error) {
+      showError(error);
+    }
+  });
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "button button-quiet";
+  cancel.textContent = "Keep it";
+  cancel.addEventListener("click", () => panel.remove());
+
+  panel.append(confirm, cancel);
+  content.append(panel);
+  confirm.focus();
 }
 
 async function loadProfiles(): Promise<void> {
@@ -133,32 +230,13 @@ async function addProfile(event: SubmitEvent): Promise<void> {
   }
 }
 
-async function renameProfile(profile: ProfileView): Promise<void> {
-  const label = window.prompt("Profile label", profile.label)?.trim();
-  if (!label || label === profile.label) return;
-
-  try {
-    await invoke("rename_profile", { id: profile.id, label });
-    await loadProfiles();
-  } catch (error) {
-    showError(error);
-  }
-}
-
-async function deleteProfile(profile: ProfileView): Promise<void> {
-  try {
-    const size = await invoke<number>("profile_size_bytes", { id: profile.id });
-    const confirmed = window.confirm(
-      `Delete the profile “${profile.label}” and all ${formatBytes(size)} in:\n${profile.path}?\n\nThis cannot be undone.`,
-    );
-    if (!confirmed) return;
-
-    await invoke("delete_profile", { id: profile.id });
-    await loadProfiles();
-  } catch (error) {
-    showError(error);
-  }
-}
+// A desktop app has no business offering "Reload" or "Inspect Element" on
+// right-click. Keep the caret menu inside text fields, where it is useful.
+document.addEventListener("contextmenu", (event) => {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("input, textarea")) return;
+  event.preventDefault();
+});
 
 profileForm.addEventListener("submit", addProfile);
 void loadProfiles();

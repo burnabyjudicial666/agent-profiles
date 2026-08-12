@@ -99,8 +99,17 @@ pub fn menu_rows(
     rows
 }
 
+/// Refresh on `Enter` as well as `Click`. On macOS the click that opens an
+/// attached menu is consumed by the menu itself, so `Click` alone can never
+/// fire and the menu would show whatever was true when it was last built —
+/// reporting a profile as running long after the user quit it by hand.
+/// `Enter` fires once as the pointer arrives, which is exactly the moment
+/// before the menu opens. `Move` is the one that repeats, and stays excluded.
 pub(crate) fn should_rebuild_for_event(event: &tauri::tray::TrayIconEvent) -> bool {
-    matches!(event, tauri::tray::TrayIconEvent::Click { .. })
+    matches!(
+        event,
+        tauri::tray::TrayIconEvent::Click { .. } | tauri::tray::TrayIconEvent::Enter { .. }
+    )
 }
 
 pub(crate) fn refresh_account_uuids(store: &mut ProfileStore) -> bool {
@@ -303,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn only_click_events_request_a_rebuild() {
+    fn opening_gestures_request_a_rebuild_but_repeats_do_not() {
         use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
         use tauri::{PhysicalPosition, Rect};
 
@@ -318,17 +327,21 @@ mod tests {
         };
         assert!(should_rebuild_for_event(&click));
 
+        // macOS never delivers Click when a menu is attached; Enter is the only
+        // signal that the menu is about to open.
+        let enter = TrayIconEvent::Enter {
+            id: id.clone(),
+            position,
+            rect: Rect::default(),
+        };
+        assert!(should_rebuild_for_event(&enter));
+
         let other_events = [
             TrayIconEvent::DoubleClick {
                 id: id.clone(),
                 position,
                 rect: Rect::default(),
                 button: MouseButton::Left,
-            },
-            TrayIconEvent::Enter {
-                id: id.clone(),
-                position,
-                rect: Rect::default(),
             },
             TrayIconEvent::Move {
                 id: id.clone(),

@@ -450,3 +450,40 @@ h1 {
     color: #211a17;
   }
 }
+
+.inline-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  border-radius: 0.5rem;
+}
+
+.inline-panel input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.inline-panel .helper {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+.inline-panel-danger {
+  border-color: rgba(190, 60, 60, 0.6);
+}
+
+/* Text selection is a document affordance, not an app one. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
