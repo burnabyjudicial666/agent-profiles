@@ -30,7 +30,17 @@ pub fn ensure_shared(platform: &dyn Platform, profile_dir: &Path, shared: &Path)
         }
         LinkState::AdoptFile(contents) => {
             create_parent(shared)?;
-            std::fs::write(shared, contents)?;
+            // Adopt ONLY into an empty slot. Once a shared config exists it is the
+            // single source of truth for every profile, and a newly-added profile
+            // carrying its own file must not overwrite it — that would silently
+            // destroy the MCP servers every other profile is already using. The
+            // displaced file is kept beside the profile so nothing is lost.
+            if shared.exists() {
+                let displaced = link.with_extension("json.replaced");
+                std::fs::rename(&link, &displaced)?;
+            } else {
+                std::fs::write(shared, contents)?;
+            }
         }
         LinkState::CreateFresh => write_shared_if_absent(shared)?,
     }
@@ -69,11 +79,30 @@ fn is_same_file(link: &Path, shared: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        // Two hardlinks to one file report the same length and creation time; the
-        // authoritative check needs GetFileInformationByHandle. Compare the cheap
-        // signals and let a false negative simply re-link, which is harmless.
-        match (std::fs::metadata(link), std::fs::metadata(shared)) {
-            (Ok(a), Ok(b)) => a.len() == b.len() && a.created().ok() == b.created().ok(),
+        // Compare the volume serial + file index, which is what actually identifies
+        // a file on Windows. Length-and-creation-time is not sufficient: two freshly
+        // written `{}` files can share both values and be mistaken for hardlinks.
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        fn identity(path: &Path) -> Option<(u32, u32, u32)> {
+            let file = std::fs::File::open(path).ok()?;
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            unsafe {
+                GetFileInformationByHandle(HANDLE(file.as_raw_handle() as _), &mut info).ok()?;
+            }
+            Some((
+                info.dwVolumeSerialNumber,
+                info.nFileIndexHigh,
+                info.nFileIndexLow,
+            ))
+        }
+
+        match (identity(link), identity(shared)) {
+            (Some(a), Some(b)) => a == b,
             _ => false,
         }
     }
@@ -150,6 +179,29 @@ mod tests {
         ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
 
         assert!(std::fs::read_to_string(&shared).unwrap().contains("keep"));
+    }
+
+    #[test]
+    fn ensure_shared_does_not_overwrite_an_existing_shared_config() {
+        let d = tmp();
+        let profile = d.path().join("profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        let link = profile.join(crate::paths::CONFIG_FILENAME);
+        let profile_contents = r#"{"mcpServers":{"profile":{}}}"#;
+        std::fs::write(&link, profile_contents).unwrap();
+
+        let shared = d.path().join("shared").join(crate::paths::CONFIG_FILENAME);
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        let shared_contents = r#"{"mcpServers":{"shared":{}}}"#;
+        std::fs::write(&shared, shared_contents).unwrap();
+
+        ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&shared).unwrap(), shared_contents);
+        assert_eq!(
+            std::fs::read_to_string(link.with_extension("json.replaced")).unwrap(),
+            profile_contents
+        );
     }
 }
 
