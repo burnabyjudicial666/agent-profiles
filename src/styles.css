@@ -143,7 +143,8 @@ h1 {
 }
 
 .section-heading h2,
-.add-section h2 {
+.add-section h2,
+.settings-section h2 {
   margin-bottom: 0;
   font-size: clamp(1.7rem, 4vw, 2.35rem);
   letter-spacing: -0.045em;
@@ -282,6 +283,7 @@ h1 {
   font-size: 0.78rem;
   font-weight: 800;
   line-height: 1.1;
+  white-space: nowrap;
   transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
@@ -306,7 +308,7 @@ h1 {
 }
 
 .button-danger {
-  border-color: transparent;
+  border-color: var(--line);
   color: var(--danger);
   background: transparent;
 }
@@ -321,7 +323,7 @@ h1 {
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 1.05fr);
   gap: 2rem;
   align-items: end;
-  padding: 1.8rem 0 0;
+  padding: 1.8rem 0 2.4rem;
   border-top: 1px solid var(--line);
 }
 
@@ -491,6 +493,8 @@ textarea {
 .settings-section {
   display: grid;
   gap: 1rem;
+  padding: 1.8rem 0 0;
+  border-top: 1px solid var(--line);
 }
 
 .toggle-row {

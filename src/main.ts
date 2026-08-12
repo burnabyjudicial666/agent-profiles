@@ -81,7 +81,11 @@ function render(profiles: ProfileView[]): void {
       title.append(makeTextElement("span", "status-badge status-warning", "same account"));
     }
     content.append(title);
-    content.append(makeTextElement("p", "profile-path", profile.path));
+    // The path is ellipsised to keep rows one line tall, so the full value has to
+    // stay reachable — it is the only thing distinguishing two similar profiles.
+    const path = makeTextElement("p", "profile-path", profile.path);
+    path.title = profile.path;
+    content.append(path);
 
     const actions = document.createElement("div");
     actions.className = "profile-actions";

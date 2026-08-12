@@ -21,13 +21,21 @@ The MCP configuration is shared across every profile. Claude Profiles keeps one 
 
 If a profile has an existing regular configuration file, its contents are adopted into the shared configuration when there is no shared file yet. When a shared configuration already exists, the displaced profile file is retained rather than silently overwriting the configuration used by the other profiles.
 
+## Launch at login
+
+The management window offers an opt-in **Launch at login** toggle. It is off until you turn it on, and it starts only the tray: no profile is opened for you.
+
+The operating system owns this setting — a login item on macOS, a registry entry on Windows, an autostart desktop entry on Linux. Claude Profiles keeps no copy of it and reads the real value each time the window opens, so turning it off in your system settings is reflected here rather than contradicted.
+
+The toggle is hidden in development builds. A login item registered from `pnpm tauri dev` would point at a `target/debug` binary that moves, gets rebuilt, and disappears on `cargo clean`, leaving an entry that fails silently at every boot.
+
 ## Platform status
 
 Verification record as of **2026-08-13**. Every unit test in this repository runs on macOS, including the Windows and Linux ones — they exercise parsing and path logic against fixtures, not a real operating system. **A passing unit test is not acceptance.** An unchecked box below means the behavior has never been observed on real hardware, not that it is known to be broken.
 
 The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
-### macOS — verified
+### macOS — verified, except the newest feature
 
 - [x] Rust suite passes, including the Claude Desktop binary and path checks
 - [x] Two Claude Desktop processes launched directly with distinct `--user-data-dir` values both stayed alive (this is the premise the whole app rests on)
@@ -41,8 +49,10 @@ The full Rust suite passes on macOS: **64 tests, 0 failures.**
 - [x] A second profile launches alongside Default and both stay usable through the app — two Claude Desktop instances running in parallel, which is the whole point of this app
 - [x] Deletion is refused while that profile is running
 - [x] The delete confirmation shows the directory size
+- [x] The window refuses to be resized below its usable minimum
+- [ ] The Launch at login toggle actually registers and removes a login item, and survives a reboot
 
-The checked boxes were confirmed by a human against the unsigned release build (`0.1.0`, Apple Silicon) on 2026-08-13, not inferred from tests. Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one, so the open boxes still need a person.
+One box is open because the feature is newer than the acceptance run, not because it is suspected broken. The other checked boxes were confirmed by a human against the unsigned release build (`0.1.0`, Apple Silicon) on 2026-08-13, not inferred from tests. Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one, so the open boxes still need a person.
 
 ### Windows — never compiled or run
 
@@ -52,6 +62,7 @@ The checked boxes were confirmed by a human against the unsigned release build (
 - [ ] MSIX vs classic default-directory selection against a real installation
 - [ ] Hardlink creation for the shared MCP config
 - [ ] Parallel instances, focus, quit, end-to-end launch
+- [ ] Launch at login writes and removes its registry entry
 
 ### Linux — never compiled or run
 
@@ -61,6 +72,7 @@ The checked boxes were confirmed by a human against the unsigned release build (
 - [ ] Per-profile `--class` producing a distinct taskbar identity
 - [ ] X11 focus via `xdotool`, and the Wayland limitation path
 - [ ] Symlink creation, parallel instances, quit flow
+- [ ] Launch at login writes and removes its autostart desktop entry
 
 Contributions running Windows or Linux are especially welcome — checking one of those boxes with a real report is more valuable than any further test written on macOS.
 
@@ -113,6 +125,22 @@ Create an unsigned local bundle for the current platform:
 ```bash
 pnpm tauri build
 ```
+
+Run the same gates CI runs, before opening a pull request:
+
+```bash
+pnpm build
+cd src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+The build is expected to be warning-free. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Releases
+
+Tagging `v*` builds on three runners and attaches the artifacts to a draft GitHub Release: one universal macOS `.dmg` covering both Intel and Apple Silicon, Windows `.msi`/`.exe`, and Linux `.AppImage`/`.deb`. The Linux runner is pinned to Ubuntu 22.04 on purpose — a binary linked against a newer glibc refuses to start on older distributions, and the error it produces blames the wrong thing.
 
 ## Installing a release build
 
