@@ -31,7 +31,7 @@ The toggle is hidden in development builds. A login item registered from `pnpm t
 
 ## Platform status
 
-Verification record as of **2026-08-13**. Every unit test in this repository runs on macOS, including the Windows and Linux ones — they exercise parsing and path logic against fixtures, not a real operating system. **A passing unit test is not acceptance.** An unchecked box below means the behavior has never been observed on real hardware, not that it is known to be broken.
+Verification record as of **2026-08-13**. CI now compiles and tests all three platforms on their own runners, but the Windows and Linux tests still only exercise parsing and path logic against fixtures — no one has ever launched this app on either. **Compiling is not running, and a passing unit test is not acceptance.** An unchecked box below means the behavior has never been observed on real hardware, not that it is known to be broken.
 
 The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
@@ -54,20 +54,20 @@ The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
 One box is open because the feature is newer than the acceptance run, not because it is suspected broken. The other checked boxes were confirmed by a human against the unsigned release build (`0.1.0`, Apple Silicon) on 2026-08-13, not inferred from tests. Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one, so the open boxes still need a person.
 
-### Windows — never compiled or run
+### Windows — compiles in CI, never run
 
 - [x] CSV process parsing and MSIX/classic path-picker logic covered by unit tests (run on macOS)
-- [ ] **The Windows target has never been compiled.** `cargo check --target x86_64-pc-windows-msvc` cannot run on this machine (`can't find crate for core`)
+- [x] **Compiles on a real Windows runner**, and passes `clippy -D warnings` and the test suite there (CI, 2026-08-13). Compiling is not running: everything below is still unobserved
 - [ ] Real process shape of the installed Claude Desktop
 - [ ] MSIX vs classic default-directory selection against a real installation
 - [ ] Hardlink creation for the shared MCP config
 - [ ] Parallel instances, focus, quit, end-to-end launch
 - [ ] Launch at login writes and removes its registry entry
 
-### Linux — never compiled or run
+### Linux — compiles in CI, never run
 
 - [x] Desktop-identity helpers, profile-id classes and filenames, `.desktop` metadata, and Wayland detection covered by unit tests (run on macOS)
-- [ ] **The Linux target has never been compiled.** `cargo check --target aarch64-unknown-linux-gnu` cannot run on this machine (`can't find crate for std`)
+- [x] **Compiles on a real Ubuntu runner**, and passes `clippy -D warnings` and the test suite there (CI, 2026-08-13). Compiling is not running: everything below is still unobserved
 - [ ] Real `claude-desktop` process shape and default data path
 - [ ] Per-profile `--class` producing a distinct taskbar identity
 - [ ] X11 focus via `xdotool`, and the Wayland limitation path
