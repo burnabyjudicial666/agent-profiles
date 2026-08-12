@@ -21,8 +21,9 @@ pub fn parse(raw: &str, main_binaries: &[&str]) -> Vec<RunningInstance> {
             }
 
             let user_data_dir = args
-                .split_whitespace()
-                .find_map(|a| a.strip_prefix(FLAG))
+                .find(FLAG)
+                .map(|at| args[at + FLAG.len()..].trim_end())
+                .filter(|rest| !rest.is_empty())
                 .map(PathBuf::from);
 
             Some(RunningInstance { pid, user_data_dir })
@@ -50,6 +51,7 @@ mod tests {
         "  503 /Applications/Claude.app/Contents/MacOS/Claude\n",
         "  504 /usr/bin/unrelated --user-data-dir=/p/work\n",
         "  505 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/p/work2\n",
+        "  506 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/Users/h/Library/Application Support/Claude Profiles/profiles/abc\n",
     );
 
     const LINUX_FIXTURE: &str = concat!(
@@ -61,7 +63,18 @@ mod tests {
     #[test]
     fn only_main_processes_are_returned() {
         let pids: Vec<i32> = parse(MAC_FIXTURE, &[MAC]).iter().map(|i| i.pid).collect();
-        assert_eq!(pids, vec![501, 503, 505]);
+        assert_eq!(pids, vec![501, 503, 505, 506]);
+    }
+
+    #[test]
+    fn a_user_data_dir_containing_spaces_is_captured_whole() {
+        let found = parse(MAC_FIXTURE, &[MAC]);
+        assert_eq!(
+            found.last().unwrap().user_data_dir,
+            Some(PathBuf::from(
+                "/Users/h/Library/Application Support/Claude Profiles/profiles/abc"
+            ))
+        );
     }
 
     #[test]
