@@ -25,7 +25,7 @@ Verification record as of **2026-08-13**. Every unit test in this repository run
 
 The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
-### macOS — verified, two safety paths open
+### macOS — verified
 
 - [x] Rust suite passes, including the Claude Desktop binary and path checks
 - [x] Two Claude Desktop processes launched directly with distinct `--user-data-dir` values both stayed alive (this is the premise the whole app rests on)
@@ -37,8 +37,8 @@ The full Rust suite passes on macOS: **64 tests, 0 failures.**
 - [x] Tray liveness marker updates after quitting Claude Desktop by hand
 - [x] A newly added profile appears in the tray immediately
 - [x] A second profile launches alongside Default and both stay usable through the app — two Claude Desktop instances running in parallel, which is the whole point of this app
-- [ ] Deletion is refused while that profile is running
-- [ ] The delete confirmation shows the directory size
+- [x] Deletion is refused while that profile is running
+- [x] The delete confirmation shows the directory size
 
 The checked boxes were confirmed by a human against the unsigned release build (`0.1.0`, Apple Silicon) on 2026-08-13, not inferred from tests. Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one, so the open boxes still need a person.
 

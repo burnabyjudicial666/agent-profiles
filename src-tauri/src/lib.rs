@@ -8,7 +8,7 @@ mod shared_config;
 mod tray;
 
 use anyhow::{anyhow, Result};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 fn profile(app: &tauri::AppHandle, id: &str) -> Result<profile_store::Profile> {
     let state = app
@@ -101,6 +101,10 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
                 .ok_or_else(|| anyhow!("management window is not available"))?;
             window.show()?;
             window.set_focus()?;
+            // The window is hidden rather than destroyed, so its DOM survives being
+            // closed — including any error banner. Tell the page it is on screen
+            // again so it can refresh, instead of showing a verdict from last time.
+            window.emit("window-shown", ())?;
         }
         (None, None) if id == "quit_app" => {
             app.exit(0);

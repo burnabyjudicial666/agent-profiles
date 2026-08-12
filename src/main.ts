@@ -1,6 +1,7 @@
 import "./styles.css";
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 type ProfileView = {
   id: string;
@@ -239,4 +240,14 @@ document.addEventListener("contextmenu", (event) => {
 });
 
 profileForm.addEventListener("submit", addProfile);
+
+// Closing the window only hides it, so the page keeps whatever it was last
+// showing. An error like "quit this profile's Claude Desktop before deleting it"
+// is a verdict about one moment — by the time the window is reopened the user has
+// very likely done exactly that. Start every visit from freshly loaded state.
+void listen("window-shown", () => {
+  clearError();
+  void loadProfiles();
+});
+
 void loadProfiles();
