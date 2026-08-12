@@ -17,6 +17,7 @@
 - The only write inside the stock Claude directory is replacing `claude_desktop_config.json` with a link.
 - No email is ever displayed. `lastKnownAccountUuid` is used only to warn about two profiles sharing one account.
 - Every failure degrades to a disabled tray row carrying its reason. The tray thread must never panic or unwrap.
+- **Never spawn a second process against a user-data directory that already has one.** Claude Desktop takes no single-instance lock (verified 2026-08-12); two processes on one profile corrupt its databases. Liveness is re-checked immediately before every spawn, not inherited from the menu that triggered it.
 - Only `platform/macos.rs`, `platform/windows.rs`, `platform/linux.rs` may contain `#[cfg(target_os = ...)]` or OS-specific calls.
 - Package manager is `pnpm`. Rust edition 2021.
 - Parallel instances are **verified on macOS only**. Tasks 8 and 9 must be accepted on real Windows and Linux hardware before being marked done.
@@ -94,32 +95,40 @@ Then set the product name to `Claude Profiles` in `src-tauri/tauri.conf.json` (`
 
 - [ ] **Step 3: Dependencies**
 
-In `src-tauri/Cargo.toml`:
+Resolve versions at install time rather than pinning numbers from this document —
+`objc2` and `windows` move fast and any number written here is stale on arrival:
+
+```bash
+cd src-tauri
+cargo add serde --features derive
+cargo add serde_json anyhow
+cargo add uuid --features v4
+cargo add --dev tempfile
+cargo add tauri --features tray-icon
+```
+
+Then add the platform-gated ones by hand in `Cargo.toml`, taking the current
+major versions from `cargo search` or docs.rs:
 
 ```toml
-[dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-uuid = { version = "1", features = ["v4"] }
-
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSRunningApplication"] }
+objc2 = "<current>"
+objc2-app-kit = { version = "<current>", features = ["NSRunningApplication"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "<current>", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
 ] }
-
-[dev-dependencies]
-tempfile = "3"
 ```
+
+Feature names inside `objc2-app-kit` and `windows` are also version-dependent. If
+one does not resolve, open the crate on docs.rs at the version cargo picked and
+use the real name. Do not drop a dependency to make the build pass — Tasks 7 and 8
+need them.
 
 - [ ] **Step 4: Verify**
 
@@ -208,26 +217,18 @@ git commit -m "chore: scaffold Claude Profiles as a Tauri v2 tray app"
         fn claude_binary(&self) -> Result<PathBuf>;
         fn running_instances(&self) -> Result<Vec<RunningInstance>>;
         fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> Result<()>;
-        fn focus(&self, pid: i32) -> Result<FocusOutcome>;
+        /// `profile_id` is carried alongside `pid` because Linux locates the window
+    /// by the `--class` it launched with, not by pid. Other backends ignore it.
+    fn focus(&self, pid: i32, profile_id: &str) -> Result<FocusOutcome>;
         fn quit(&self, pid: i32) -> Result<()>;
-
-        /// Extra arguments this platform needs at launch. Linux supplies
-        /// `--class=…`; the others supply nothing. `--user-data-dir` is appended
-        /// after these, because the Windows parser reads it to end-of-line.
-        fn extra_launch_args(&self, _profile: &Profile) -> Vec<String> {
-            Vec::new()
-        }
-
-        /// Give a profile its own desktop identity, where the platform has one.
-        /// Linux writes a `.desktop` entry; the others do nothing.
-        fn register_identity(&self, _profile: &Profile) -> Result<()> {
-            Ok(())
-        }
-        fn unregister_identity(&self, _profile: &Profile) -> Result<()> {
-            Ok(())
-        }
     }
     ```
+
+    Task 9 later adds three defaulted methods (`extra_launch_args`,
+    `register_identity`, `unregister_identity`) for the Linux desktop-identity
+    mechanism. They are **not** declared here, because they take a `&Profile` and
+    `Profile` is not defined until Task 3. Adding them later costs nothing:
+    defaulted trait methods do not disturb existing implementors.
   - `pub fn current() -> Box<dyn Platform>` — compiles to the one backend for this OS
   - `pub fn find_for(instances: &[RunningInstance], profile_dir: &Path, is_default: bool) -> Option<i32>`
   - `pub struct Paths { root: PathBuf }` with `Paths::new(root)`, `profiles_json()`, `profiles_dir()`, `profile_dir(id)`, `shared_config()`
@@ -368,7 +369,9 @@ pub trait Platform: Send + Sync {
     fn claude_binary(&self) -> Result<PathBuf>;
     fn running_instances(&self) -> Result<Vec<RunningInstance>>;
     fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> Result<()>;
-    fn focus(&self, pid: i32) -> Result<FocusOutcome>;
+    /// `profile_id` is carried alongside `pid` because Linux locates the window
+    /// by the `--class` it launched with, not by pid. Other backends ignore it.
+    fn focus(&self, pid: i32, profile_id: &str) -> Result<FocusOutcome>;
     fn quit(&self, pid: i32) -> Result<()>;
 }
 
@@ -716,7 +719,7 @@ mod tests {
         std::fs::create_dir_all(&profile).unwrap();
         let shared = d.path().join("shared").join(crate::paths::CONFIG_FILENAME);
 
-        ensure_shared(&FakePlatform, &profile, &shared).unwrap();
+        ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
 
         assert_eq!(std::fs::read_to_string(&shared).unwrap().trim(), "{}");
     }
@@ -733,31 +736,56 @@ mod tests {
         .unwrap();
         let shared = d.path().join("shared").join(crate::paths::CONFIG_FILENAME);
 
-        ensure_shared(&FakePlatform, &profile, &shared).unwrap();
+        ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
 
         assert!(std::fs::read_to_string(&shared).unwrap().contains("keep"));
     }
+}
+```
 
-    /// Minimal Platform stand-in: real linking is a per-backend concern.
-    struct FakePlatform;
-    impl crate::platform::Platform for FakePlatform {
-        fn data_root(&self) -> anyhow::Result<std::path::PathBuf> { unimplemented!() }
-        fn default_profile_dir(&self) -> anyhow::Result<std::path::PathBuf> { unimplemented!() }
-        fn claude_binary(&self) -> anyhow::Result<std::path::PathBuf> { unimplemented!() }
-        fn running_instances(&self) -> anyhow::Result<Vec<crate::platform::RunningInstance>> {
-            Ok(vec![])
+The stand-in lives in its own module rather than inside `mod tests`, because
+Task 11's tests need it too. Add it to `shared_config.rs`:
+
+```rust
+#[cfg(test)]
+pub mod tests_support {
+    use crate::platform::{FocusOutcome, Platform, RunningInstance};
+    use std::path::{Path, PathBuf};
+
+    /// Minimal Platform stand-in: real linking is a per-backend concern, so this
+    /// one just copies. `running` lets a test stage a live instance.
+    #[derive(Default)]
+    pub struct FakePlatform {
+        running: Vec<RunningInstance>,
+    }
+
+    impl FakePlatform {
+        pub fn with_running(running: Vec<RunningInstance>) -> Self {
+            Self { running }
+        }
+    }
+
+    impl Platform for FakePlatform {
+        fn data_root(&self) -> anyhow::Result<PathBuf> { unimplemented!() }
+        fn default_profile_dir(&self) -> anyhow::Result<PathBuf> { unimplemented!() }
+        fn claude_binary(&self) -> anyhow::Result<PathBuf> {
+            Ok(PathBuf::from("/fake/claude"))
+        }
+        fn running_instances(&self) -> anyhow::Result<Vec<RunningInstance>> {
+            Ok(self.running.clone())
         }
         fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> anyhow::Result<()> {
             std::fs::copy(shared, profile_dir.join(crate::paths::CONFIG_FILENAME))?;
             Ok(())
         }
-        fn focus(&self, _pid: i32) -> anyhow::Result<crate::platform::FocusOutcome> {
-            unimplemented!()
-        }
+        fn focus(&self, _pid: i32, _profile_id: &str) -> anyhow::Result<FocusOutcome> { unimplemented!() }
         fn quit(&self, _pid: i32) -> anyhow::Result<()> { unimplemented!() }
     }
 }
 ```
+
+`RunningInstance` must derive `Clone` for this, which Task 2 already specifies.
+Import it in the test module with `use crate::shared_config::tests_support::FakePlatform;`.
 
 Add `mod shared_config;` to `main.rs`.
 
@@ -1190,14 +1218,29 @@ mod tests {
     }
 
     #[test]
-    fn the_binary_is_the_executable_not_the_bundle() {
-        assert_eq!(
-            BINARY,
-            "/Applications/Claude.app/Contents/MacOS/Claude"
-        );
+    fn a_missing_binary_is_rejected_by_name() {
+        let err = check_binary(std::path::Path::new("/nope/Claude")).unwrap_err().to_string();
+        assert!(err.contains("/nope/Claude"), "the error must name the path, got: {err}");
+    }
+
+    #[test]
+    fn a_present_but_non_executable_binary_is_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let bin = d.path().join("Claude");
+        std::fs::write(&bin, b"not really a binary").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(check_binary(&bin).is_err());
+
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_binary(&bin).is_ok());
     }
 }
 ```
+
+The binary path itself is a constant; asserting it equals its own literal would
+test nothing. What is worth testing is the check around it, so `check_binary` is a
+free function taking the path rather than logic buried inside `claude_binary`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1231,6 +1274,16 @@ fn default_profile_in(home: &Path) -> PathBuf {
     home.join("Library").join("Application Support").join("Claude")
 }
 
+fn check_binary(bin: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(bin)
+        .map_err(|_| anyhow!("Claude Desktop was not found at {}", bin.display()))?;
+    if meta.permissions().mode() & 0o111 == 0 {
+        return Err(anyhow!("{} is not executable", bin.display()));
+    }
+    Ok(())
+}
+
 impl Platform for MacOs {
     fn data_root(&self) -> Result<PathBuf> {
         Ok(data_root_in(&home()?))
@@ -1242,12 +1295,7 @@ impl Platform for MacOs {
 
     fn claude_binary(&self) -> Result<PathBuf> {
         let bin = PathBuf::from(BINARY);
-        use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(&bin)
-            .map_err(|_| anyhow!("Claude Desktop was not found at {BINARY}"))?;
-        if meta.permissions().mode() & 0o111 == 0 {
-            return Err(anyhow!("{BINARY} is not executable"));
-        }
+        check_binary(&bin)?;
         Ok(bin)
     }
 
@@ -1260,7 +1308,7 @@ impl Platform for MacOs {
         Ok(())
     }
 
-    fn focus(&self, pid: i32) -> Result<FocusOutcome> {
+    fn focus(&self, pid: i32, _profile_id: &str) -> Result<FocusOutcome> {
         use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
         let app = unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
             .ok_or_else(|| anyhow!("no running application with pid {pid}"))?;
@@ -1307,7 +1355,7 @@ and note in the README that focusing then requires Accessibility permission.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test macos`
-Expected: 2 passed, and `cargo build` succeeds.
+Expected: 3 passed, and `cargo build` succeeds.
 
 - [ ] **Step 5: Manual acceptance (macOS)**
 
@@ -1502,7 +1550,7 @@ mod imp {
             Ok(())
         }
 
-        fn focus(&self, pid: i32) -> Result<FocusOutcome> {
+        fn focus(&self, pid: i32, _profile_id: &str) -> Result<FocusOutcome> {
             use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
             use windows::Win32::UI::WindowsAndMessaging::{
                 EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
@@ -1531,8 +1579,19 @@ mod imp {
 
             match search.found {
                 Some(hwnd) => {
-                    unsafe { let _ = SetForegroundWindow(hwnd); }
-                    Ok(FocusOutcome::Focused)
+                    // Windows refuses this when the caller is not already the
+                    // foreground process. Report the refusal instead of claiming
+                    // success — the tray click usually satisfies it, but a
+                    // keyboard-driven or scripted invocation may not.
+                    let raised = unsafe { SetForegroundWindow(hwnd) }.as_bool();
+                    if raised {
+                        Ok(FocusOutcome::Focused)
+                    } else {
+                        Ok(FocusOutcome::Unsupported(
+                            "Windows refused to bring the window forward; \
+                             click its taskbar entry instead".into(),
+                        ))
+                    }
                 }
                 None => Ok(FocusOutcome::Unsupported(
                     "no visible window was found for this instance".into(),
@@ -1574,7 +1633,7 @@ On real Windows hardware with Claude Desktop installed:
 2. Launch a second instance by hand:
    `& "$env:LOCALAPPDATA\AnthropicClaude\claude.exe" --user-data-dir="$env:TEMP\cp-test"`
    Confirm both instances stay alive. **If the second instance exits immediately or focuses the first, parallel instances are not possible on Windows — record the finding and degrade this backend to single-instance rather than proceeding.**
-3. Confirm `std::fs::hard_link` succeeds without elevation between `%APPDATA%\Claude Profiles\shared\` and `%APPDATA%\Claude\`. If it fails, switch this backend to copy-on-launch and document that Windows config sharing is one-way.
+3. Confirm `std::fs::hard_link` succeeds without elevation from `%APPDATA%\Claude Profiles\shared\` into **whichever default-profile directory step 4 finds**. Test the MSIX path specifically if that is the one in use: writing into a package's `LocalCache` from outside the package is the case most likely to be refused, and it is the case most users will hit. If it fails, switch this backend to copy-on-launch and document that Windows config sharing is one-way.
 4. Confirm which default-profile candidate exists on this machine, and that the app picked it.
 
 - [ ] **Step 6: Commit**
@@ -1595,10 +1654,9 @@ git commit -m "feat: Windows platform backend with MSIX-aware path probing"
 - Consumes: `unix_ps`, the `Platform` trait
 - Produces:
   - `pub struct Linux;` implementing `Platform`
-  - `pub fn slug(label: &str) -> String`
-  - `pub fn wm_class(label: &str) -> String` — `claude-profiles-<slug>`
-  - `pub fn desktop_entry(label: &str, exec: &str, icon: &str) -> String`
-  - `pub fn desktop_file_path(applications_dir: &Path, label: &str) -> PathBuf`
+  - `pub fn wm_class(profile_id: &str) -> String` — `claude-profiles-<id>`
+  - `pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String`
+  - `pub fn desktop_file_path(applications_dir: &Path, profile_id: &str) -> PathBuf`
   - `pub fn is_wayland(session_type: Option<&str>) -> bool`
 
 Paths: data root `$XDG_CONFIG_HOME/claude-profiles` (falling back to `~/.config/claude-profiles`); default profile `~/.config/Claude`; binary resolved from `PATH` as `claude-desktop`.
@@ -1607,10 +1665,15 @@ Paths: data root `$XDG_CONFIG_HOME/claude-profiles` (falling back to `~/.config/
 another's window, so instead of fighting that, each instance is given its own
 desktop identity and the desktop environment does the focusing:
 
-- Launch with `--class=claude-profiles-<slug>`, which Chromium turns into
+- Launch with `--class=claude-profiles-<profile id>`, which Chromium turns into
   `WM_CLASS` on X11 and `app_id` on Wayland.
-- Write `~/.local/share/applications/claude-profiles-<slug>.desktop` with
+- Write `~/.local/share/applications/claude-profiles-<profile id>.desktop` with
   `Name=Claude — <label>` and a matching `StartupWMClass`.
+
+The key is the profile's **id**, not a slug of its label. Slugging labels would
+let "Work A" and "work a" collide on one desktop entry, and a rename would orphan
+the old file. An id is unique and immutable: a rename rewrites the same entry with
+a new `Name=`, and only deletion needs cleanup.
 
 Each profile then gets its own taskbar entry, name, and alt-tab slot. Tray focus
 becomes a bonus: `xdotool search --class` on X11, an honest `Unsupported` message
@@ -1632,25 +1695,40 @@ In `linux.rs`:
 mod tests {
     use super::*;
 
-    #[test]
-    fn labels_become_filesystem_and_wm_safe_slugs() {
-        assert_eq!(slug("Kerja"), "kerja");
-        assert_eq!(slug("Work / Client A"), "work-client-a");
-        assert_eq!(slug("  spaced  out  "), "spaced-out");
-        assert_eq!(wm_class("Kerja"), "claude-profiles-kerja");
+    fn profile(id: &str, label: &str) -> crate::profile_store::Profile {
+        crate::profile_store::Profile {
+            id: id.into(),
+            label: label.into(),
+            path: std::path::PathBuf::from("/p").join(id),
+            is_default: false,
+            last_known_account_uuid: None,
+        }
     }
 
     #[test]
-    fn two_labels_that_slug_the_same_do_not_collide_silently() {
-        // Callers must disambiguate; the slug function itself is pure.
-        assert_eq!(slug("Work A"), slug("work  a"));
+    fn the_class_is_keyed_on_the_profile_id() {
+        assert_eq!(wm_class("a1b2"), "claude-profiles-a1b2");
+    }
+
+    #[test]
+    fn labels_that_would_slug_identically_still_get_distinct_identities() {
+        let a = profile("id-one", "Work A");
+        let b = profile("id-two", "work  a");
+        assert_ne!(wm_class(&a.id), wm_class(&b.id));
+
+        let dir = std::path::Path::new("/apps");
+        assert_ne!(
+            desktop_file_path(dir, &a.id),
+            desktop_file_path(dir, &b.id)
+        );
     }
 
     #[test]
     fn the_desktop_entry_declares_a_matching_startup_wm_class() {
-        let entry = desktop_entry("Kerja", "/usr/bin/claude-desktop --class=x", "/i/icon.png");
+        let p = profile("a1b2", "Kerja");
+        let entry = desktop_entry(&p, "/usr/bin/claude-desktop --class=x", "/i/icon.png");
         assert!(entry.contains("Name=Claude — Kerja"));
-        assert!(entry.contains("StartupWMClass=claude-profiles-kerja"));
+        assert!(entry.contains("StartupWMClass=claude-profiles-a1b2"));
         assert!(entry.contains("Icon=/i/icon.png"));
         assert!(entry.starts_with("[Desktop Entry]"));
     }
@@ -1658,9 +1736,9 @@ mod tests {
     #[test]
     fn the_desktop_file_lands_in_the_applications_directory() {
         assert_eq!(
-            desktop_file_path(std::path::Path::new("/home/h/.local/share/applications"), "Kerja"),
+            desktop_file_path(std::path::Path::new("/home/h/.local/share/applications"), "a1b2"),
             std::path::PathBuf::from(
-                "/home/h/.local/share/applications/claude-profiles-kerja.desktop"
+                "/home/h/.local/share/applications/claude-profiles-a1b2.desktop"
             )
         );
     }
@@ -1689,7 +1767,7 @@ mod tests {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd src-tauri && cargo test linux`
-Expected: FAIL — `cannot find function slug`.
+Expected: FAIL — `cannot find function wm_class`.
 
 Guard this module the same way as Task 8 (`#[cfg(any(target_os = "linux", test))]` for the pure helpers) so it is testable from the Mac.
 
@@ -1701,32 +1779,15 @@ use std::path::{Path, PathBuf};
 
 pub const BINARY_NAME: &str = "claude-desktop";
 
-pub fn slug(label: &str) -> String {
-    let mut out = String::new();
-    let mut pending_dash = false;
-    for c in label.chars() {
-        if c.is_ascii_alphanumeric() {
-            if pending_dash && !out.is_empty() {
-                out.push('-');
-            }
-            pending_dash = false;
-            out.extend(c.to_lowercase());
-        } else {
-            pending_dash = true;
-        }
-    }
-    out
+pub fn wm_class(profile_id: &str) -> String {
+    format!("claude-profiles-{profile_id}")
 }
 
-pub fn wm_class(label: &str) -> String {
-    format!("claude-profiles-{}", slug(label))
+pub fn desktop_file_path(applications_dir: &Path, profile_id: &str) -> PathBuf {
+    applications_dir.join(format!("{}.desktop", wm_class(profile_id)))
 }
 
-pub fn desktop_file_path(applications_dir: &Path, label: &str) -> PathBuf {
-    applications_dir.join(format!("{}.desktop", wm_class(label)))
-}
-
-pub fn desktop_entry(label: &str, exec: &str, icon: &str) -> String {
+pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
@@ -1737,7 +1798,8 @@ pub fn desktop_entry(label: &str, exec: &str, icon: &str) -> String {
          Terminal=false\n\
          Categories=Utility;\n\
          StartupWMClass={class}\n",
-        class = wm_class(label)
+        label = profile.label,
+        class = wm_class(&profile.id)
     )
 }
 
@@ -1784,14 +1846,14 @@ fn claude_binary(&self) -> Result<PathBuf> {
 
 ```rust
 fn extra_launch_args(&self, profile: &Profile) -> Vec<String> {
-    vec![format!("--class={}", wm_class(&profile.label))]
+    vec![format!("--class={}", wm_class(&profile.id))]
 }
 ```
 
 `focus` tries X11 and is honest on Wayland:
 
 ```rust
-fn focus(&self, pid: i32) -> Result<FocusOutcome> {
+fn focus(&self, _pid: i32, profile_id: &str) -> Result<FocusOutcome> {
     if is_wayland(std::env::var("XDG_SESSION_TYPE").ok().as_deref()) {
         return Ok(FocusOutcome::Unsupported(
             "Wayland does not let one app raise another's window — \
@@ -1803,21 +1865,25 @@ fn focus(&self, pid: i32) -> Result<FocusOutcome> {
             "install xdotool to focus from here, or use this profile's taskbar entry".into(),
         ));
     }
+    let class = wm_class(profile_id);
     let status = std::process::Command::new("xdotool")
-        .args(["search", "--pid", &pid.to_string(), "windowactivate"])
+        .args(["search", "--class", &class, "windowactivate"])
         .status()?;
     if status.success() {
         Ok(FocusOutcome::Focused)
     } else {
         Ok(FocusOutcome::Unsupported(format!(
-            "xdotool could not raise the window for pid {pid}"
+            "xdotool found no window with class {class}"
         )))
     }
 }
 ```
 
-`wmctrl` is deliberately absent: its `-ia` flag takes a window id, not a pid, so it
-would have been a call that never worked. `xdotool search --pid` does take a pid.
+Two deliberate choices here. `wmctrl` is absent because its `-ia` flag takes a
+window id, not a pid — it would have been a call that never worked. And the search
+is by class, not by `--pid`: `_NET_WM_PID` is not reliably set, whereas the class
+is one we passed at launch ourselves. That is also why `focus` takes the profile id
+alongside the pid; macOS and Windows ignore the id and use the pid.
 
 The desktop entries are written and removed alongside profiles. Add to this module:
 
@@ -1863,7 +1929,7 @@ left behind pointing at a class nothing uses.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test linux`
-Expected: 4 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Manual acceptance (Linux) — REQUIRED before marking this task done**
 
@@ -1874,7 +1940,7 @@ On real Linux hardware with `claude-desktop` installed from Anthropic's apt repo
 3. `claude-desktop --user-data-dir=/tmp/cp-test` while another instance runs: confirm both stay alive. **If not, record the finding and degrade this backend to single-instance.**
 4. Note whether the session is X11 or Wayland (`echo $XDG_SESSION_TYPE`) and confirm the focus behaviour matches — focused on X11 with xdotool present, a clear "unsupported" message otherwise.
 5. **Confirm `--class` actually takes effect.** Launch a profile, then read the window's class:
-   - X11: `xprop WM_CLASS` and click the window — expect `claude-profiles-<slug>`.
+   - X11: `xprop WM_CLASS` and click the window — expect `claude-profiles-<profile id>`, the id being the uuid shown for that profile in the management window.
    - Wayland (GNOME): `gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell -m org.gnome.Shell.Eval 'global.get_window_actors().map(w => w.meta_window.get_wm_class())'`, or simply check whether the taskbar shows a separate, correctly-named entry.
 
    **If `--class` is ignored, this whole approach collapses** — the instances stay indistinguishable and there is no focus story on Wayland at all. Record that finding plainly, keep the xdotool path for X11, and state the Wayland limitation in the README rather than papering over it.
@@ -2023,6 +2089,7 @@ Focus and quit are called on the platform directly; only launch needs composing.
 mod tests {
     use super::*;
     use crate::profile_store::Profile;
+    use crate::shared_config::tests_support::FakePlatform;
     use std::path::PathBuf;
 
     fn profile(is_default: bool) -> Profile {
@@ -2050,12 +2117,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let paths = crate::paths::Paths::new(d.path());
         let p = Profile { path: d.path().join("gone"), ..profile(false) };
-        assert!(prepare(&crate::shared_config::tests_support::FakePlatform, &p, &paths).is_err());
+        assert!(prepare(&FakePlatform::default(), &p, &paths).is_err());
     }
 
     #[test]
     fn launching_a_profile_that_is_already_running_is_refused() {
-        use crate::shared_config::tests_support::FakePlatform;
         let d = tempfile::tempdir().unwrap();
         let paths = crate::paths::Paths::new(d.path());
         let p = Profile { path: d.path().join("live"), ..profile(false) };
@@ -2073,27 +2139,13 @@ mod tests {
 }
 ```
 
-Promote the `FakePlatform` from Task 4 into a `#[cfg(test)] pub mod tests_support` inside `shared_config.rs` so both test modules share one stand-in rather than defining it twice. Give it a running-instance list so this test can stage a live profile:
+`FakePlatform` comes from Task 4's `tests_support` module unchanged; nothing new is
+needed here.
 
-```rust
-pub struct FakePlatform {
-    running: Vec<crate::platform::RunningInstance>,
-}
-
-impl FakePlatform {
-    pub fn with_running(running: Vec<crate::platform::RunningInstance>) -> Self {
-        Self { running }
-    }
-}
-
-impl Default for FakePlatform {
-    fn default() -> Self {
-        Self { running: vec![] }
-    }
-}
-```
-
-`running_instances` returns `Ok(self.running.clone())`, and `claude_binary` returns a path inside the test's temp directory that the test creates as an executable file, so `launch`'s preflight passes and the guard is what actually rejects. Update the Task 4 tests to construct it with `FakePlatform::default()`.
+The last test only passes if `launch` checks liveness **before** anything that can
+fail for an unrelated reason. Order matters and is asserted by the test: the guard
+runs first, so a live profile reports "already running" rather than whatever the
+binary probe happens to say. That is also the better message for a user.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -2132,8 +2184,6 @@ pub fn prepare(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Res
 /// already offers Focus instead of Launch for a live profile, but a menu built
 /// seconds ago can be stale, so the check is repeated here, closest to the spawn.
 pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Result<i32> {
-    let binary = platform.claude_binary()?;
-
     let running = platform.running_instances().unwrap_or_default();
     if let Some(pid) = find_for(&running, &profile.path, profile.is_default) {
         return Err(anyhow!(
@@ -2142,6 +2192,7 @@ pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Resu
         ));
     }
 
+    let binary = platform.claude_binary()?;
     prepare(platform, profile, paths)?;
     let mut args = platform.extra_launch_args(profile);
     args.extend(launch_args(profile)); // --user-data-dir stays last
@@ -2159,7 +2210,7 @@ pub fn launch(platform: &dyn Platform, profile: &Profile, paths: &Paths) -> Resu
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test instance_manager`
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2185,6 +2236,12 @@ git commit -m "feat: compose launch from platform backend and shared config"
   - `pub fn rebuild(app: &tauri::AppHandle) -> Result<()>`
 
 Menu item ids encode the action: `launch:<id>`, `focus:<id>`, `quit:<id>`, plus fixed `manage` and `quit_app`.
+
+A running profile produces **two** rows: the focus row, and an indented quit row
+directly beneath it. Without the second row there is no way to stop an instance
+from the tray — and since Task 13 refuses to delete a profile while it runs, a user
+would have no in-app path to deleting one at all. A stopped profile produces only
+its launch row.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2222,13 +2279,31 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_profile_offers_launch() {
+    fn a_running_profile_also_offers_a_quit_row_right_after_it() {
+        let (_d, store) = store_with_one_extra();
+        let kerja = store.list()[1].clone();
+        let instances = vec![RunningInstance {
+            pid: 777,
+            user_data_dir: Some(kerja.path.clone()),
+        }];
+        let rows = menu_rows(&store, &instances, None);
+
+        let focus_at = rows.iter().position(|r| r.id == format!("focus:{}", kerja.id)).unwrap();
+        let quit = &rows[focus_at + 1];
+        assert_eq!(quit.id, format!("quit:{}", kerja.id));
+        assert_eq!(quit.pid, Some(777));
+        assert!(quit.text.contains("Quit"));
+    }
+
+    #[test]
+    fn a_stopped_profile_offers_launch_and_no_quit_row() {
         let (_d, store) = store_with_one_extra();
         let kerja = store.list()[1].clone();
         let rows = menu_rows(&store, &[], None);
         let row = rows.iter().find(|r| r.id == format!("launch:{}", kerja.id)).unwrap();
         assert_eq!(row.pid, None);
         assert!(row.text.starts_with("○ "));
+        assert!(!rows.iter().any(|r| r.id.starts_with("quit:")));
     }
 
     #[test]
@@ -2288,7 +2363,7 @@ pub fn menu_rows(
     let mut rows: Vec<MenuRow> = store
         .list()
         .iter()
-        .map(|p| {
+        .flat_map(|p| {
             let pid = find_for(instances, &p.path, p.is_default);
             let marker = if pid.is_some() { "●" } else { "○" };
             let shared_account = p
@@ -2298,12 +2373,23 @@ pub fn menu_rows(
                 .unwrap_or(false);
             let suffix = if shared_account { "  (same account)" } else { "" };
             let action = if pid.is_some() { "focus" } else { "launch" };
-            MenuRow {
+
+            let mut out = vec![MenuRow {
                 id: format!("{action}:{}", p.id),
                 text: format!("{marker} {}{suffix}", p.label),
                 enabled: binary_error.is_none(),
                 pid,
+            }];
+
+            if pid.is_some() {
+                out.push(MenuRow {
+                    id: format!("quit:{}", p.id),
+                    text: format!("      Quit {}", p.label),
+                    enabled: binary_error.is_none(),
+                    pid,
+                });
             }
+            out
         })
         .collect();
 
@@ -2322,7 +2408,7 @@ pub fn menu_rows(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test tray`
-Expected: 4 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Wire the rows into a real tray**
 
@@ -2338,7 +2424,7 @@ Append `rebuild(app: &tauri::AppHandle) -> Result<()>`. It must:
 In `main.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
 
 - `launch:<id>` → `instance_manager::launch`, then `rebuild`
-- `focus:<id>` → re-scan, `find_for`, `platform.focus(pid)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild so the row can show the message
+- `focus:<id>` → re-scan, `find_for`, `platform.focus(pid, &profile.id)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild so the row can show the message
 - `quit:<id>` → re-scan, then spawn a thread running `platform.quit(pid)` followed by `rebuild` (it blocks up to 10s and must not stall the tray)
 - `manage` → show the management window (Task 13)
 - `quit_app` → `app.exit(0)`
@@ -2346,6 +2432,26 @@ In `main.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
 Every handler wraps its work in a closure returning `Result<()>`; on `Err`, log and rebuild rather than panicking.
 
 Also call `rebuild` from a `TrayIconEvent` handler so the menu refreshes each time it opens, and once during `setup`.
+
+Add one more function beside it, and call it from `setup` **before** the first
+rebuild:
+
+```rust
+/// Re-asserts every profile's desktop identity. A no-op everywhere but Linux.
+pub fn sync_identities(state: &AppState) {
+    let Ok(store) = state.store.lock() else { return };
+    for p in store.list() {
+        let _ = state.platform.register_identity(p);
+    }
+}
+```
+
+Without this, the only profiles that would ever get a `.desktop` entry are ones
+added through the management window during this run: the Default profile — which
+is seeded, never added — would never get one, and neither would profiles carried
+over from a previous run or whose entry was deleted by hand. Running it at startup
+makes the entries self-healing. Errors are swallowed on purpose; a missing desktop
+entry must never stop the tray from coming up.
 
 - [ ] **Step 6: Verify end to end (development platform)**
 
@@ -2476,6 +2582,7 @@ pub fn add_profile(
         .into_iter()
         .find(|v| v.id == created.id)
         .ok_or("profile vanished after creation")?;
+    let _ = state.platform.register_identity(&created);
     drop(store);
     let _ = crate::tray::rebuild(&app);
     Ok(view)
@@ -2484,7 +2591,20 @@ pub fn add_profile(
 
 Write `rename_profile`, `delete_profile`, and `profile_size_bytes` in the same shape: lock, mutate, `save`, drop the lock, `rebuild`, return. `profile_size_bytes` walks the directory recursively summing `metadata.len()`.
 
-`delete_profile` must refuse while that profile's instance is running: call `state.platform.running_instances()` and `find_for` first, and if a pid comes back, return `Err("quit this profile's Claude Desktop before deleting it".into())`.
+Each mutation also maintains the profile's desktop identity, which is what makes
+the Linux taskbar entry follow the profile:
+
+- `add_profile` → `register_identity` on the new profile, as above.
+- `rename_profile` → `register_identity` again after the label changes, so the
+  entry's `Name=` follows. No cleanup is needed: the entry is keyed on the profile
+  id, so the rewrite lands on the same file.
+- `delete_profile` → `unregister_identity` **before** removing the directory, so a
+  failure to delete the data does not leave a dangling launcher entry behind.
+
+All three ignore the result. A desktop entry that could not be written is a
+cosmetic loss, never a reason to fail the operation the user asked for.
+
+`delete_profile` must refuse while that profile's instance is running: call `state.platform.running_instances()` and `find_for` first, and if a pid comes back, return `Err("quit this profile's Claude Desktop before deleting it".into())`. The tray's quit row is the user's way to satisfy that.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2610,8 +2730,10 @@ Spec coverage against `2026-08-12-claude-profiles-design.md`:
 | macOS paths, focus, quit | 7 |
 | Windows MSIX path probing, focus, quit | 8 |
 | Linux paths, focus degradation, quit | 9 |
-| Linux per-profile `--class` + `.desktop` identity | 2, 9, 11, 13 |
+| Linux per-profile `--class` + `.desktop` identity | 9, 11, 12, 13 |
+| Desktop entries cover Default and heal themselves | 12 (`sync_identities`) |
 | Launch refused when the profile is already running | 11 |
+| Quitting an instance from the tray | 12 |
 | Unix `ps` parsing incl. helper exclusion | 5 |
 | Windows CSV parsing incl. spaces in paths | 6 |
 | Liveness survives an app restart | 5, 6, 12 (check 5) |

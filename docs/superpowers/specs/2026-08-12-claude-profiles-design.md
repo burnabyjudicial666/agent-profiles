@@ -28,31 +28,34 @@ that name.
 
 ## Feasibility
 
-**macOS: verified on 2026-08-12.** Two instances were launched simultaneously with
-separate `--user-data-dir` values and both ran independently. Electron enforces
-single-instance via a lock file *inside* the user-data directory, so distinct
-directories mean distinct locks.
+**macOS: verified on 2026-08-12.** Two instances launched simultaneously with
+separate `--user-data-dir` values both ran independently.
 
-**There is no single-instance lock (verified 2026-08-12).** Running the binary
-twice against the *same* `--user-data-dir` does **not** produce a focus-the-existing-window
-handoff, as most Electron apps do. Both processes stay alive and fight over one
-profile, logging `Could not open the quota database, resetting`.
+A second test that day established *why*, and the answer is not the comfortable
+one. Most Electron apps take a single-instance lock inside the user-data directory,
+which would make parallel profiles work by design. **Claude Desktop takes no such
+lock.** Running the binary twice against the *same* `--user-data-dir` leaves both
+processes alive, fighting over one profile and logging
+`Could not open the quota database, resetting`.
 
-Two consequences, both load-bearing:
+So parallel instances work not because the app supports them, but because nothing
+prevents them. Two consequences, both load-bearing:
 
-- "Focus by relaunching the same command" is not available on any platform.
-- Launching a profile that is already running risks corrupting its data. The tray
+- "Focus by relaunching the same command" — the usual Electron idiom — is not
+  available on any platform.
+- Launching a profile that is already running **corrupts its data**. The tray
   therefore offers Focus rather than Launch for a live profile, and `launch()`
-  re-checks liveness immediately before spawning, because a menu built seconds
-  ago may be stale. This is a data-safety guard, not a convenience.
+  re-checks liveness immediately before spawning, because a menu built seconds ago
+  may be stale. This is a data-safety guard, not a convenience, and it is the one
+  invariant this design cannot relax.
 
-**Windows and Linux: unverified.** The mechanism is Electron's, not macOS's, so it
-is expected to hold, but it was not tested — this design was written on a Mac with
-no access to the other two platforms. Each platform backend therefore carries a
-**manual acceptance check** that must be run on real hardware before that backend
-is considered done. If parallel instances turn out to be impossible on a platform,
-that backend degrades to launching one instance at a time; the rest of the app is
-unaffected.
+**Windows and Linux: unverified.** The absence of a lock is a property of the
+application, not of macOS, so the same behaviour is expected on all three
+platforms — but it was not tested, because this design was written on a Mac.
+Each backend therefore carries a **manual acceptance check** that must be run on
+real hardware before that backend is considered done. If parallel instances turn
+out to be impossible on a platform, that backend degrades to launching one
+instance at a time; the rest of the app is unaffected.
 
 ## Per-platform facts
 
@@ -90,27 +93,39 @@ Under native Wayland no application may raise another application's window, so t
 Linux backend does not try to solve focus by force. It solves it by making the
 desktop environment able to do the job:
 
-- Every instance is launched with `--class=claude-profiles-<slug>`, which Chromium
-  turns into `WM_CLASS` on X11 and `app_id` on Wayland.
+- Every instance is launched with `--class=claude-profiles-<profile id>`, which
+  Chromium turns into `WM_CLASS` on X11 and `app_id` on Wayland.
 - For each profile, Claude Profiles writes
-  `~/.local/share/applications/claude-profiles-<slug>.desktop` with
-  `Name=Claude — <label>`, the profile's own icon, and a matching
-  `StartupWMClass=claude-profiles-<slug>`.
+  `~/.local/share/applications/claude-profiles-<profile id>.desktop` with
+  `Name=Claude — <label>`, the app icon, and a matching `StartupWMClass`.
+
+The identity is keyed on the profile's **id**, not on a slug of its label. Two
+profiles labelled "Work A" and "work a" would slug identically and silently
+clobber each other's desktop entry, and renaming a label would orphan the old
+file. The id is unique and immutable, so a rename simply rewrites the same entry
+with a new `Name=`, and no cleanup is needed until the profile is deleted.
 
 The desktop environment then treats each profile as a separate application: its
 own taskbar entry, its own name, its own alt-tab slot. The user focuses a profile
 the same way they focus anything else, which is more seamless than a tray click
 could ever be, and it works identically on X11 and Wayland.
 
-Focus from the tray remains a bonus: on X11 the backend uses
-`xdotool search --class`, and on Wayland it reports `FocusOutcome::Unsupported`
-with a message pointing at the taskbar entry. A tray row that cannot raise a
+Focus from the tray remains a bonus: on X11 the backend runs
+`xdotool search --class claude-profiles-<id> windowactivate`, and on Wayland it
+reports `FocusOutcome::Unsupported` with a message pointing at the taskbar entry.
+Searching by class rather than by pid is deliberate — `_NET_WM_PID` is not always
+set, whereas the class is one we set ourselves. A tray row that cannot raise a
 window is not a dead end, because the window is reachable by normal means.
 
 This is the inverse of the macOS decision: there, per-profile app bundles were
 rejected over code-signing risk. A `.desktop` file carries no such cost, so on
-Linux the per-profile identity is simply free. The `.desktop` files are removed
-when a profile is deleted.
+Linux the per-profile identity is simply free.
+
+Entries are written for **every** profile including Default, re-synced at startup
+so a deleted or stale entry heals itself, and removed when a profile is deleted.
+Giving Default its own class means a Default window started from Claude Profiles
+carries a different `WM_CLASS` than one the user started from their own launcher;
+consistent naming across profiles is worth that small oddity.
 
 ## Scope
 
@@ -126,7 +141,8 @@ distribution.
 - As a user with two accounts, I open the tray and see both profiles, launch each,
   and use both Claude Desktop windows at the same time.
 - As a user, I click a profile that is already running and its window comes to the
-  front instead of a second copy starting.
+  front instead of a second copy starting — and on the one platform where raising
+  a window is forbidden, I am told where to find it instead.
 - As a user, I edit my MCP server config once and every profile picks it up.
 - As a user, I add a third profile, launch it, and sign in to a new account without
   disturbing the other two.
@@ -143,24 +159,38 @@ Tauri v2. All process and filesystem work lives in Rust. The tray menu is built
 natively from Rust. A small web UI window handles profile management (add, rename,
 delete) only.
 
+Artwork lives in `assets/icons/` — a "cp" mark supplied as a favicon pack. The
+window and app icons are generated from it. The macOS tray needs a separate
+monochrome template variant, because a solid coloured square ignores the menu
+bar's light and dark states; there, legibility outranks the brand colour.
+
 ### The platform seam
 
 Everything OS-specific sits behind one trait, implemented three times. Nothing
 else in the codebase may branch on the operating system.
 
 ```rust
-pub trait Platform {
+pub trait Platform: Send + Sync {
     fn data_root(&self) -> Result<PathBuf>;
     fn default_profile_dir(&self) -> Result<PathBuf>;
     fn claude_binary(&self) -> Result<PathBuf>;
     fn running_instances(&self) -> Result<Vec<RunningInstance>>;
     fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> Result<()>;
-    fn focus(&self, pid: i32) -> Result<FocusOutcome>;
+    fn focus(&self, pid: i32, profile_id: &str) -> Result<FocusOutcome>;
     fn quit(&self, pid: i32) -> Result<()>;
+
+    // Defaulted to no-ops; only Linux overrides them.
+    fn extra_launch_args(&self, _profile: &Profile) -> Vec<String> { Vec::new() }
+    fn register_identity(&self, _profile: &Profile) -> Result<()> { Ok(()) }
+    fn unregister_identity(&self, _profile: &Profile) -> Result<()> { Ok(()) }
 }
 
 pub enum FocusOutcome { Focused, Unsupported(String) }
 ```
+
+The last three exist for the Linux desktop-identity mechanism described above.
+They are defaulted rather than required so macOS and Windows say nothing about a
+concept they do not have.
 
 The core — profile registry, shared-config decision logic, process-output parsing,
 menu row construction — is platform-independent and unit tested on any machine.
@@ -213,8 +243,14 @@ Claude Desktop wrote wins, which matches what a user editing config through the 
 expects. On Windows, a broken hardlink presents as case 2 and self-heals.
 
 **`instance_manager`** — launch, quit, focus, composed from the platform backend.
-Launch spawns the binary detached, with `--user-data-dir=<path>` for non-default
-profiles and no flag for Default.
+Launch spawns the binary detached, with the platform's own extra arguments
+(`--class` on Linux) followed by `--user-data-dir=<path>` for non-default profiles
+and no such flag for Default. `--user-data-dir` goes last because the Windows
+command-line parser reads it to end-of-line.
+
+Launch refuses outright when the profile already has a live process, re-checking
+liveness immediately before spawning rather than trusting the menu that triggered
+it. See Feasibility: a second process on one profile corrupts it.
 
 **Liveness** never trusts stored PIDs. On startup and on every tray open, the app
 enumerates running processes and matches each profile by its `--user-data-dir`
@@ -240,7 +276,12 @@ the tray.
 
 - Claude Desktop not found → all rows disabled, one row explains it, naming the
   paths that were probed.
-- Profile directory deleted externally → row marked missing, offers to recreate.
+- Profile directory deleted externally → launching is blocked with the missing
+  path named. Claude Profiles does not offer to recreate it: an empty directory
+  would look like a working profile that has silently lost its account. The user
+  deletes the profile from the management window instead, which tolerates a
+  missing directory.
+- Launch requested for a profile that is already running → refused, naming the pid.
 - Spawn fails → row shows the OS error.
 - Link repair fails → launch is blocked for that profile with the reason shown,
   rather than launching with a silently unshared config.
@@ -262,8 +303,11 @@ target:
   of another.
 - Windows `Win32_Process` CSV parsing: the same set of cases against captured
   Windows output, including quoted command lines containing spaces.
-- Path probing: given a fake filesystem root, each backend picks the expected
-  binary and default-profile directory, including the MSIX-vs-classic choice.
+- Windows path probing: given a fake filesystem root, the MSIX-vs-classic choice
+  picks the candidate that exists, and rejects a directory named like the binary.
+- Linux desktop identity: id-keyed class and filename, and a generated `.desktop`
+  whose `StartupWMClass` matches the class actually passed at launch.
+- Launch refusal: a profile with a live process is rejected before spawning.
 
 Launch, focus, and quit are verified manually per platform; they cannot be
 meaningfully faked. Each backend carries an explicit manual acceptance checklist,
@@ -271,10 +315,11 @@ and a backend is not done until someone has run it on that OS.
 
 ## Decisions deliberately closed
 
-- Instances share one application icon and are indistinguishable in the OS task
-  switcher. Accepted. Generating per-profile app bundles was rejected as
-  code-signing risk and breakage on Claude Desktop updates. The tray is the
-  navigation surface.
+- **On macOS and Windows** instances share one application icon and are
+  indistinguishable in the OS task switcher. Accepted. Generating per-profile app
+  bundles was rejected as code-signing risk and breakage on Claude Desktop
+  updates. The tray is the navigation surface there. Linux is the exception, and
+  gets per-profile identity for free — see the Linux section above.
 - No hot-swapping of profile data. Parallel instances make it unnecessary.
 - No packaging or code signing in this scope. `pnpm tauri build` produces an
   unsigned local build; distribution is a separate project.
