@@ -59,6 +59,19 @@ pub fn current() -> Box<dyn Platform> {
     return Box::new(windows::Windows);
 }
 
+#[cfg(unix)]
+pub fn unix_signal_quit(pid: i32) -> Result<()> {
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return Ok(());
+        }
+    }
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

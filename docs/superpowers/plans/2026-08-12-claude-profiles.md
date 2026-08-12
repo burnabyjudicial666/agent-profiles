@@ -1456,7 +1456,7 @@ Expected: 3 passed, and `cargo build` succeeds.
 
 Cannot be automated. With Claude Desktop installed:
 
-1. `ps -axo pid=,args= | grep "MacOS/Claude" | grep -v -- "--type="` with the app running prints exactly one line.
+1. `ps -axo pid=,args= | grep '[M]acOS/Claude' | grep -v -- "--type="` with the app running prints exactly one line. The bracket expression avoids counting the grep process itself.
 2. Launch two instances by hand with distinct `--user-data-dir` values and confirm both stay alive — this is the parallel-instance guarantee.
 
 - [ ] **Step 6: Commit**
