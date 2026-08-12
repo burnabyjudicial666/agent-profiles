@@ -21,6 +21,7 @@ pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
          Icon={icon}\n\
          Terminal=false\n\
          Categories=Utility;\n\
+         NoDisplay=true\n\
          StartupWMClass={class}\n",
         label = profile.label,
         class = wm_class(&profile.id)
@@ -212,6 +213,7 @@ mod tests {
         let entry = desktop_entry(&p, "/usr/bin/claude-desktop --class=x", "/i/icon.png");
         assert!(entry.contains("Name=Claude — Kerja"));
         assert!(entry.contains("StartupWMClass=claude-profiles-a1b2"));
+        assert!(entry.contains("NoDisplay=true"));
         assert!(entry.contains("Icon=/i/icon.png"));
         assert!(entry.starts_with("[Desktop Entry]"));
     }
