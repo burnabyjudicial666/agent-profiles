@@ -1715,6 +1715,8 @@ The `windows` crate's exact type names (`BOOL` vs `windows::core::BOOL`) shift b
 
 `quit` sleeps a flat 10 seconds before the forced kill rather than polling, because checking liveness on Windows needs another API round trip; the tray runs it on a worker thread so the delay is invisible.
 
+Residual risk to confirm on real hardware: because the sleep is unconditional, the forced `taskkill /F` fires even when the process already exited cleanly. Windows recycles process ids aggressively, so in principle that second call could land on an unrelated process that inherited the id within those ten seconds. The acceptance run should check that quitting an instance leaves every other running instance alive. If it turns out to be a real hazard, replace the flat sleep with a poll on `OpenProcess` + `GetExitCodeProcess` and skip the force kill once the process is gone.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test windows`
