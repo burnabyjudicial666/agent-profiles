@@ -436,7 +436,7 @@ git commit -m "feat: add platform trait seam and rooted paths"
   - `store.remove(id, paths) -> Result<()>` — refuses the Default profile
   - `store.set_account_uuid(id, Option<String>)`
 
-`load` takes the Default directory as a parameter rather than asking the platform, so it stays testable with a temp path.
+`load` takes the Default directory as a parameter rather than asking the platform, so it stays testable with a temp path. A missing `profiles.json` is a first run and seeds the Default profile without creating a backup. If an existing registry cannot be read or parsed, `load` moves it to `profiles.json.corrupt`, replacing any previous backup, before falling back to a freshly seeded store; this keeps profiles whose directories still exist recoverable after the next save.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -464,6 +464,7 @@ mod tests {
         assert!(store.list()[0].is_default);
         assert_eq!(store.list()[0].label, "Default");
         assert_eq!(store.list()[0].path, def);
+        assert!(!paths.profiles_json().with_extension("json.corrupt").exists());
     }
 
     #[test]
@@ -474,6 +475,24 @@ mod tests {
         let store = ProfileStore::load(&paths, &def).unwrap();
         assert_eq!(store.list().len(), 1);
         assert!(store.list()[0].is_default);
+    }
+
+    #[test]
+    fn a_corrupt_registry_is_preserved_before_falling_back_to_default() {
+        let (_d, paths, def) = fixture();
+        let corrupt_bytes = b"{ not json";
+        std::fs::create_dir_all(paths.profiles_json().parent().unwrap()).unwrap();
+        std::fs::write(&paths.profiles_json(), corrupt_bytes).unwrap();
+
+        let store = ProfileStore::load(&paths, &def).unwrap();
+
+        assert_eq!(store.list().len(), 1);
+        assert!(store.list()[0].is_default);
+        assert!(!paths.profiles_json().exists());
+        assert_eq!(
+            std::fs::read(paths.profiles_json().with_extension("json.corrupt")).unwrap(),
+            corrupt_bytes
+        );
     }
 
     #[test]
@@ -556,10 +575,21 @@ pub struct ProfileStore {
 
 impl ProfileStore {
     pub fn load(paths: &Paths, default_dir: &Path) -> Result<Self> {
-        let mut store = std::fs::read_to_string(paths.profiles_json())
-            .ok()
-            .and_then(|raw| serde_json::from_str::<ProfileStore>(&raw).ok())
-            .unwrap_or_default();
+        let file = paths.profiles_json();
+        let mut store = match std::fs::read(&file) {
+            Ok(raw) => match serde_json::from_slice::<ProfileStore>(&raw) {
+                Ok(store) => store,
+                Err(_) => {
+                    preserve_corrupt_registry(&file)?;
+                    Self::default()
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(_) => {
+                preserve_corrupt_registry(&file)?;
+                Self::default()
+            }
+        };
 
         if !store.profiles.iter().any(|p| p.is_default) {
             store.profiles.insert(
@@ -640,12 +670,23 @@ impl ProfileStore {
         }
     }
 }
+
+fn preserve_corrupt_registry(file: &Path) -> Result<()> {
+    let corrupt = file.with_extension("json.corrupt");
+    match std::fs::remove_file(&corrupt) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    std::fs::rename(file, corrupt)?;
+    Ok(())
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd src-tauri && cargo test profile_store`
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
