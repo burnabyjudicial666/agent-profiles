@@ -1,3 +1,8 @@
+//! The mirror of `win_proc`: compiled on Windows too, so its parser keeps being
+//! tested there, but `scan` shells out to `ps` and nothing on Windows can reach
+//! it. `parse` is the pure half the tests actually exercise.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use crate::platform::RunningInstance;
 use anyhow::Result;
 use std::path::PathBuf;
