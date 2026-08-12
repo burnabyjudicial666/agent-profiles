@@ -26,7 +26,8 @@
 
 ```
 src-tauri/src/
-  main.rs             # Tauri setup, tray wiring, command registration
+  main.rs             # thin binary shim; only calls claude_profiles_lib::run()
+  lib.rs              # Tauri setup, tray wiring, command registration, `mod` declarations
   platform/
     mod.rs            # Platform trait, RunningInstance, FocusOutcome, current()
     macos.rs
@@ -203,7 +204,7 @@ git commit -m "chore: scaffold Claude Profiles as a Tauri v2 tray app"
 
 **Files:**
 - Create: `src-tauri/src/platform/mod.rs`, `src-tauri/src/paths.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: nothing
@@ -300,7 +301,7 @@ mod tests {
 }
 ```
 
-Add `mod paths;` and `mod platform;` to `main.rs`.
+Add `mod paths;` and `mod platform;` to `lib.rs`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -422,7 +423,7 @@ git commit -m "feat: add platform trait seam and rooted paths"
 
 **Files:**
 - Create: `src-tauri/src/profile_store.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `paths::Paths`
@@ -523,7 +524,7 @@ mod tests {
 }
 ```
 
-Add `mod profile_store;` to `main.rs`.
+Add `mod profile_store;` to `lib.rs`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -649,7 +650,7 @@ Expected: 6 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/profile_store.rs src-tauri/src/main.rs
+git add src-tauri/src/profile_store.rs src-tauri/src/lib.rs
 git commit -m "feat: add profile registry with Default profile seeding"
 ```
 
@@ -659,7 +660,7 @@ git commit -m "feat: add profile registry with Default profile seeding"
 
 **Files:**
 - Create: `src-tauri/src/shared_config.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `paths::CONFIG_FILENAME`, `platform::Platform`
@@ -787,7 +788,7 @@ pub mod tests_support {
 `RunningInstance` must derive `Clone` for this, which Task 2 already specifies.
 Import it in the test module with `use crate::shared_config::tests_support::FakePlatform;`.
 
-Add `mod shared_config;` to `main.rs`.
+Add `mod shared_config;` to `lib.rs`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -889,7 +890,7 @@ Expected: 5 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/shared_config.rs src-tauri/src/main.rs
+git add src-tauri/src/shared_config.rs src-tauri/src/lib.rs
 git commit -m "feat: share claude_desktop_config.json across profiles"
 ```
 
@@ -1959,7 +1960,7 @@ git commit -m "feat: Linux platform backend with honest focus degradation"
 
 **Files:**
 - Create: `src-tauri/src/account.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `profile_store::Profile`
@@ -2061,7 +2062,7 @@ Expected: 3 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/account.rs src-tauri/src/main.rs
+git add src-tauri/src/account.rs src-tauri/src/lib.rs
 git commit -m "feat: flag profiles signed in to the same account"
 ```
 
@@ -2071,7 +2072,7 @@ git commit -m "feat: flag profiles signed in to the same account"
 
 **Files:**
 - Create: `src-tauri/src/instance_manager.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: `platform::Platform`, `profile_store::Profile`, `paths::Paths`, `shared_config`
@@ -2215,7 +2216,7 @@ Expected: 4 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/instance_manager.rs src-tauri/src/shared_config.rs src-tauri/src/main.rs
+git add src-tauri/src/instance_manager.rs src-tauri/src/shared_config.rs src-tauri/src/lib.rs
 git commit -m "feat: compose launch from platform backend and shared config"
 ```
 
@@ -2225,7 +2226,7 @@ git commit -m "feat: compose launch from platform backend and shared config"
 
 **Files:**
 - Create: `src-tauri/src/tray.rs`
-- Modify: `src-tauri/src/main.rs`
+- Modify: `src-tauri/src/lib.rs`
 
 **Interfaces:**
 - Consumes: everything above
@@ -2421,7 +2422,7 @@ Append `rebuild(app: &tauri::AppHandle) -> Result<()>`. It must:
 5. Build a `tauri::menu::Menu` from `menu_rows` with `MenuItem::with_id(app, &row.id, &row.text, row.enabled, None::<&str>)`; append a separator, then `manage` / "Manage Profiles…" and `quit_app` / "Quit Claude Profiles".
 6. Attach with `TrayIconBuilder::with_id("main").menu(&menu).build(app)` on first construction, or `tray.set_menu(Some(menu))` on later rebuilds.
 
-In `main.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
+In `lib.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
 
 - `launch:<id>` → `instance_manager::launch`, then `rebuild`
 - `focus:<id>` → re-scan, `find_for`, `platform.focus(pid, &profile.id)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild so the row can show the message
@@ -2481,7 +2482,7 @@ git commit -m "feat: tray menu with live instance state"
 
 **Files:**
 - Create: `src-tauri/src/commands.rs`
-- Modify: `src-tauri/src/main.rs`, `src/index.html`, `src/main.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`
+- Modify: `src-tauri/src/lib.rs`, `src/index.html`, `src/main.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`
 
 **Interfaces:**
 - Consumes: `AppState`, `profile_store`, `account`, `platform`
