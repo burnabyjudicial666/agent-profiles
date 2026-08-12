@@ -42,6 +42,17 @@
           <button type="submit" class="button button-primary">Add profile</button>
         </form>
       </section>
+      <section class="settings-section" id="autostart-section" aria-labelledby="settings-heading" hidden>
+        <div>
+          <p class="eyebrow">Startup</p>
+          <h2 id="settings-heading">Launch at login</h2>
+          <p class="helper">Start Claude Profiles automatically when you sign in. This only starts the tray; no profile is opened for you.</p>
+        </div>
+        <label class="toggle-row">
+          <input id="autostart" type="checkbox" />
+          <span>Start Claude Profiles at login</span>
+        </label>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

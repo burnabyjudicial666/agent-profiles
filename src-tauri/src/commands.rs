@@ -158,6 +158,47 @@ pub fn delete_profile(
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct AutostartState {
+    /// False in development builds, where registering a login item would point at
+    /// a binary that moves. The UI hides the control rather than offering a lie.
+    pub offered: bool,
+    pub enabled: bool,
+}
+
+/// The operating system is the single source of truth. Deliberately not mirrored
+/// into `profiles.json`: a person can turn the login item off in System Settings
+/// without telling this app, and a stored copy would then be confidently wrong.
+#[tauri::command]
+pub fn autostart_state(app: tauri::AppHandle) -> Result<AutostartState, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    if !crate::autostart_is_offered() {
+        return Ok(AutostartState {
+            offered: false,
+            enabled: false,
+        });
+    }
+    let enabled = app.autolaunch().is_enabled().map_err(|e| e.to_string())?;
+    Ok(AutostartState {
+        offered: true,
+        enabled,
+    })
+}
+
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    if !crate::autostart_is_offered() {
+        return Err("launching at login is only available in an installed build".into());
+    }
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
 #[tauri::command]
 pub fn profile_size_bytes(state: tauri::State<AppState>, id: String) -> Result<u64, String> {
     // Take the path and let the lock go. Walking a profile directory is seconds of

@@ -239,6 +239,38 @@ document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 });
 
+type AutostartState = { offered: boolean; enabled: boolean };
+
+const autostartSection = document.querySelector<HTMLElement>("#autostart-section");
+const autostartToggle = document.querySelector<HTMLInputElement>("#autostart");
+
+// The operating system owns this setting, so the checkbox is refreshed from it
+// rather than remembered here — the user may have changed it in System Settings.
+async function loadAutostart(): Promise<void> {
+  if (!autostartSection || !autostartToggle) return;
+  try {
+    const state = await invoke<AutostartState>("autostart_state");
+    autostartSection.hidden = !state.offered;
+    autostartToggle.checked = state.enabled;
+  } catch (error) {
+    autostartSection.hidden = true;
+    showError(error);
+  }
+}
+
+autostartToggle?.addEventListener("change", async () => {
+  const wanted = autostartToggle.checked;
+  try {
+    await invoke("set_autostart", { enabled: wanted });
+    clearError();
+  } catch (error) {
+    showError(error);
+  }
+  // Re-read rather than trusting the click: if the OS refused, the checkbox must
+  // show what is actually true, not what the user asked for.
+  await loadAutostart();
+});
+
 profileForm.addEventListener("submit", addProfile);
 
 // Closing the window only hides it, so the page keeps whatever it was last
@@ -248,6 +280,8 @@ profileForm.addEventListener("submit", addProfile);
 void listen("window-shown", () => {
   clearError();
   void loadProfiles();
+  void loadAutostart();
 });
 
 void loadProfiles();
+void loadAutostart();

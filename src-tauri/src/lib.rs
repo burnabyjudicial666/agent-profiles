@@ -115,6 +115,17 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
     Ok(())
 }
 
+const MIN_WINDOW_WIDTH: f64 = 560.0;
+const MIN_WINDOW_HEIGHT: f64 = 420.0;
+
+/// Registering autostart from a development build would point the operating
+/// system at the `target/debug` binary, which moves, gets rebuilt, and is deleted
+/// by `cargo clean` — leaving a login item that fails silently every boot. Only a
+/// bundled release build has a stable path worth registering.
+pub(crate) fn autostart_is_offered() -> bool {
+    !cfg!(debug_assertions)
+}
+
 /// A tray app outlives its windows. Closing the management window must hide it,
 /// never destroy it: the webview is created once, and `get_webview_window` would
 /// return `None` from then on, leaving "Manage Profiles…" permanently broken.
@@ -133,12 +144,20 @@ pub(crate) fn exit_should_be_prevented(code: Option<i32>) -> bool {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Opt-in only: the plugin registers nothing until the user asks for it.
+        // `None` bakes no extra arguments into the login item.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::list_profiles,
             commands::add_profile,
             commands::rename_profile,
             commands::delete_profile,
             commands::profile_size_bytes,
+            commands::autostart_state,
+            commands::set_autostart,
         ])
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
@@ -170,6 +189,16 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Asserted here as well as in tauri.conf.json. The profile rows put a
+            // label, a full filesystem path and two buttons on one line; below this
+            // width they overlap into something unusable.
+            if let Some(window) = app.get_webview_window("main") {
+                let floor = tauri::LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+                if let Err(error) = window.set_min_size(Some(floor)) {
+                    eprintln!("could not set the minimum window size: {error}");
+                }
+            }
 
             let platform = platform::current();
             let paths = paths::Paths::new(platform.data_root()?);
