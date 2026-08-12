@@ -1,6 +1,10 @@
 //! Compiled on every platform so its tests keep running, but the code that
 //! calls these helpers is the Windows `Platform` impl, which exists only there.
-#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+//!
+//! The `test` arm matters even on Windows: `scan` shells out to PowerShell, so
+//! nothing in the test binary can reach it, and a lib-test build sees it as dead.
+//! Its pure counterpart `parse` is what the tests actually exercise.
+#![cfg_attr(any(not(target_os = "windows"), test), allow(dead_code))]
 
 use crate::platform::RunningInstance;
 use anyhow::Result;
