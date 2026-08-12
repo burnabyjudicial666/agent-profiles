@@ -104,7 +104,7 @@ cargo add serde --features derive
 cargo add serde_json anyhow
 cargo add uuid --features v4
 cargo add --dev tempfile
-cargo add tauri --features tray-icon
+cargo add tauri --features tray-icon,image-png
 ```
 
 Then add the platform-gated ones by hand in `Cargo.toml`, taking the current
