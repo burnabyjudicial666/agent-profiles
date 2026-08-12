@@ -16,6 +16,8 @@
         "title": "Claude Profiles",
         "width": 800,
         "height": 600,
+        "minWidth": 560,
+        "minHeight": 420,
         "visible": false
       }
     ],

@@ -60,9 +60,9 @@ impl Platform for MacOs {
 
     fn focus(&self, pid: i32, _profile_id: &str) -> Result<FocusOutcome> {
         use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-        let app = unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
+        let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
             .ok_or_else(|| anyhow!("no running application with pid {pid}"))?;
-        unsafe { app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) };
+        app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
         Ok(FocusOutcome::Focused)
     }
 

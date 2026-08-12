@@ -11,11 +11,13 @@ pub struct AppState {
     pub store: Mutex<ProfileStore>,
 }
 
+/// Deliberately carries no pid. A pid captured while the menu was being built can
+/// be dead by the time the row is clicked, so every handler rescans for itself —
+/// storing one here would only invite someone to trust the stale copy.
 pub struct MenuRow {
     pub id: String,
     pub text: String,
     pub enabled: bool,
-    pub pid: Option<i32>,
 }
 
 pub(crate) fn combine_error_messages(
@@ -73,7 +75,6 @@ pub fn menu_rows(
                 id: format!("{action}:{}", p.id),
                 text: format!("{marker} {}{suffix}", p.label),
                 enabled: binary_error.is_none(),
-                pid,
             }];
 
             if pid.is_some() {
@@ -81,7 +82,6 @@ pub fn menu_rows(
                     id: format!("quit:{}", p.id),
                     text: format!("      Quit {}", p.label),
                     enabled: binary_error.is_none(),
-                    pid,
                 });
             }
             out
@@ -93,7 +93,6 @@ pub fn menu_rows(
             id: "error".into(),
             text: message.to_string(),
             enabled: false,
-            pid: None,
         });
     }
     rows
@@ -225,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_profile_gets_a_marker_and_a_pid() {
+    fn a_running_profile_gets_a_filled_marker_and_a_focus_action() {
         let (_d, store) = store_with_one_extra();
         let kerja = store.list()[1].clone();
         let instances = vec![RunningInstance {
@@ -237,7 +236,6 @@ mod tests {
             .iter()
             .find(|r| r.id == format!("focus:{}", kerja.id))
             .unwrap();
-        assert_eq!(row.pid, Some(777));
         assert!(row.text.starts_with("● "));
         assert!(row.enabled);
     }
@@ -258,7 +256,6 @@ mod tests {
             .unwrap();
         let quit = &rows[focus_at + 1];
         assert_eq!(quit.id, format!("quit:{}", kerja.id));
-        assert_eq!(quit.pid, Some(777));
         assert!(quit.text.contains("Quit"));
     }
 
@@ -271,7 +268,6 @@ mod tests {
             .iter()
             .find(|r| r.id == format!("launch:{}", kerja.id))
             .unwrap();
-        assert_eq!(row.pid, None);
         assert!(row.text.starts_with("○ "));
         assert!(!rows.iter().any(|r| r.id.starts_with("quit:")));
     }

@@ -2,7 +2,11 @@ use crate::profile_store::Profile;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(unix, test))]
 pub mod unix_ps;
+/// Gated like the `windows` backend that consumes it. Compiled under `test` too,
+/// so its parser keeps being exercised on every platform's test run.
+#[cfg(any(target_os = "windows", test))]
 pub mod win_proc;
 
 #[cfg(any(target_os = "linux", test))]
@@ -21,6 +25,10 @@ pub struct RunningInstance {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FocusOutcome {
     Focused,
+    /// Only Linux ever returns this, for Wayland's refusal to let one app raise
+    /// another's window. The other backends compile it away, hence the allow —
+    /// it is unreachable on this platform, not unused in the codebase.
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
     Unsupported(String),
 }
 
