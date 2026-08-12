@@ -1990,19 +1990,19 @@ pub fn applications_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local").join("share").join("applications"))
 }
 
-pub fn write_desktop_entry(label: &str, binary: &Path, icon: &Path) -> Result<()> {
+pub fn write_desktop_entry(profile: &Profile, binary: &Path, icon: &Path) -> Result<()> {
     let dir = applications_dir()?;
     std::fs::create_dir_all(&dir)?;
-    let exec = format!("{} --class={}", binary.display(), wm_class(label));
+    let exec = format!("{} --class={}", binary.display(), wm_class(&profile.id));
     std::fs::write(
-        desktop_file_path(&dir, label),
-        desktop_entry(label, &exec, &icon.display().to_string()),
+        desktop_file_path(&dir, &profile.id),
+        desktop_entry(profile, &exec, &icon.display().to_string()),
     )?;
     Ok(())
 }
 
-pub fn remove_desktop_entry(label: &str) -> Result<()> {
-    let path = desktop_file_path(&applications_dir()?, label);
+pub fn remove_desktop_entry(profile_id: &str) -> Result<()> {
+    let path = desktop_file_path(&applications_dir()?, profile_id);
     if path.exists() {
         std::fs::remove_file(path)?;
     }

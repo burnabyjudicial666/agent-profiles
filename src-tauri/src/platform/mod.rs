@@ -1,10 +1,11 @@
+use crate::profile_store::Profile;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 pub mod unix_ps;
 pub mod win_proc;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -33,6 +34,18 @@ pub trait Platform: Send + Sync {
     /// by the `--class` it launched with, not by pid. Other backends ignore it.
     fn focus(&self, pid: i32, profile_id: &str) -> Result<FocusOutcome>;
     fn quit(&self, pid: i32) -> Result<()>;
+
+    fn extra_launch_args(&self, _profile: &Profile) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn register_identity(&self, _profile: &Profile) -> Result<()> {
+        Ok(())
+    }
+
+    fn unregister_identity(&self, _profile: &Profile) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub fn find_for(
