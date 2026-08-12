@@ -111,9 +111,23 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// A tray app outlives its windows. Closing the management window must hide it,
+/// never destroy it: the webview is created once, and `get_webview_window` would
+/// return `None` from then on, leaving "Manage Profiles…" permanently broken.
+pub(crate) fn close_hides_window(label: &str) -> bool {
+    label == "main"
+}
+
+/// `None` means a person closed the last window, which for a tray app is not a
+/// request to quit — the tray is still there. `Some` only ever comes from our own
+/// `app.exit()`, i.e. the "Quit Claude Profiles" row, which really must quit.
+pub(crate) fn exit_should_be_prevented(code: Option<i32>) -> bool {
+    code.is_none()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let result = tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::list_profiles,
@@ -129,6 +143,16 @@ pub fn run() {
                 eprintln!("{reason}");
                 if let Err(rebuild_error) = tray::rebuild_with_error(app, Some(&reason)) {
                     eprintln!("tray rebuild failed: {rebuild_error}");
+                }
+            }
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if close_hides_window(window.label()) {
+                    api.prevent_close();
+                    if let Err(error) = window.hide() {
+                        eprintln!("could not hide the management window: {error}");
+                    }
                 }
             }
         })
@@ -159,9 +183,35 @@ pub fn run() {
             tray::rebuild(app.handle())?;
             Ok(())
         })
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(error) = result {
-        eprintln!("Claude Profiles failed to run: {error}");
+    match app {
+        Ok(app) => app.run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                if exit_should_be_prevented(*code) {
+                    api.prevent_exit();
+                }
+            }
+        }),
+        Err(error) => eprintln!("Claude Profiles failed to run: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_the_management_window_hides_it_rather_than_destroying_it() {
+        assert!(close_hides_window("main"));
+        assert!(!close_hides_window("some-future-window"));
+    }
+
+    #[test]
+    fn only_our_own_quit_row_is_allowed_to_end_the_process() {
+        // A person closing the last window reports no code; the tray lives on.
+        assert!(exit_should_be_prevented(None));
+        // `app.exit(0)` from "Quit Claude Profiles" reports one, and must win.
+        assert!(!exit_should_be_prevented(Some(0)));
     }
 }

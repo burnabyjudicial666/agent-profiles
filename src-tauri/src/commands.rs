@@ -48,7 +48,10 @@ pub(crate) fn directory_size(path: &Path) -> anyhow::Result<u64> {
     let mut total = 0;
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
-        let metadata = entry.metadata()?;
+        // `symlink_metadata` does NOT follow links. Following them would descend
+        // into whatever a link points at — counting bytes that live outside this
+        // profile, and recursing forever on a link that points back up its own tree.
+        let metadata = entry.path().symlink_metadata()?;
         if metadata.is_dir() {
             total += directory_size(&entry.path())?;
         } else {
@@ -56,6 +59,29 @@ pub(crate) fn directory_size(path: &Path) -> anyhow::Result<u64> {
         }
     }
     Ok(total)
+}
+
+/// The frontend trims and refuses a blank label, but a Tauri command is the real
+/// API boundary. A blank label renders as a nameless tray row, and a duplicate one
+/// renders as two identical rows for two different accounts — both leave the user
+/// unable to tell which profile they are about to launch.
+pub(crate) fn validate_label(
+    store: &ProfileStore,
+    label: &str,
+    exclude_id: &str,
+) -> Result<String, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("a profile needs a label".into());
+    }
+    let taken = store
+        .list()
+        .iter()
+        .any(|p| p.id != exclude_id && p.label.eq_ignore_ascii_case(label));
+    if taken {
+        return Err(format!("another profile is already called “{label}”"));
+    }
+    Ok(label.to_string())
 }
 
 fn register_renamed_identity(platform: &dyn Platform, renamed: &Profile) {
@@ -75,6 +101,7 @@ pub fn add_profile(
     label: String,
 ) -> Result<ProfileView, String> {
     let mut store = state.store.lock().map_err(|e| e.to_string())?;
+    let label = validate_label(&store, &label, "")?;
     let created = store.add(&label, &state.paths).map_err(|e| e.to_string())?;
     store.save(&state.paths).map_err(|e| e.to_string())?;
     let view = to_views(&store)
@@ -98,6 +125,9 @@ pub fn rename_profile(
     store
         .get(&id)
         .ok_or_else(|| format!("no profile with id {id}"))?;
+    // Exclude this profile from the duplicate check, so re-saving its own label
+    // (or only changing its capitalisation) is not reported as a collision.
+    let label = validate_label(&store, &label, &id)?;
     store.rename(&id, &label).map_err(|e| e.to_string())?;
     store.save(&state.paths).map_err(|e| e.to_string())?;
     if let Some(renamed) = store.get(&id) {
@@ -130,11 +160,17 @@ pub fn delete_profile(
 
 #[tauri::command]
 pub fn profile_size_bytes(state: tauri::State<AppState>, id: String) -> Result<u64, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    let profile = store
-        .get(&id)
-        .ok_or_else(|| format!("no profile with id {id}"))?;
-    directory_size(&profile.path).map_err(|e| e.to_string())
+    // Take the path and let the lock go. Walking a profile directory is seconds of
+    // I/O on a large account, and the tray rebuild wants this same mutex from the
+    // main thread on every hover — holding it across the walk freezes the whole app.
+    let path = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        store
+            .get(&id)
+            .map(|profile| profile.path.clone())
+            .ok_or_else(|| format!("no profile with id {id}"))?
+    };
+    directory_size(&path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -256,6 +292,52 @@ mod tests {
             error,
             "quit this profile's Claude Desktop before deleting it"
         );
+    }
+
+    #[test]
+    fn a_blank_label_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = Paths::new(d.path().join("root"));
+        let def = d.path().join("stock");
+        std::fs::create_dir_all(&def).unwrap();
+        let store = ProfileStore::load(&paths, &def).unwrap();
+
+        assert!(validate_label(&store, "   ", "").is_err());
+        assert_eq!(validate_label(&store, "  Kerja  ", "").unwrap(), "Kerja");
+    }
+
+    #[test]
+    fn a_label_already_taken_by_another_profile_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = Paths::new(d.path().join("root"));
+        let def = d.path().join("stock");
+        std::fs::create_dir_all(&def).unwrap();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let kerja = store.add("Kerja", &paths).unwrap();
+
+        // Case differences still collide: two tray rows a person cannot tell apart.
+        assert!(validate_label(&store, "kerja", "").is_err());
+        // But a profile may keep, or re-case, its own label.
+        assert_eq!(validate_label(&store, "KERJA", &kerja.id).unwrap(), "KERJA");
+    }
+
+    #[test]
+    fn a_symlinked_directory_is_not_followed_when_measuring_a_profile() {
+        let d = tempfile::tempdir().unwrap();
+        let profile = d.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(profile.join("real.bin"), b"1234").unwrap();
+
+        let outside = d.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("huge.bin"), vec![0u8; 4096]).unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, profile.join("link")).unwrap();
+
+        // Only the profile's own 4 bytes count, plus the link entry itself — never
+        // the 4096 bytes living outside the profile.
+        assert!(directory_size(&profile).unwrap() < 100);
     }
 
     #[test]
