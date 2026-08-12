@@ -25,7 +25,7 @@ Verification record as of **2026-08-13**. Every unit test in this repository run
 
 The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
-### macOS — partially verified
+### macOS — verified, two safety paths open
 
 - [x] Rust suite passes, including the Claude Desktop binary and path checks
 - [x] Two Claude Desktop processes launched directly with distinct `--user-data-dir` values both stayed alive (this is the premise the whole app rests on)
@@ -33,10 +33,10 @@ The full Rust suite passes on macOS: **64 tests, 0 failures.**
 - [x] Management window opens from the tray, and closing it hides the window instead of quitting the app — the tray survives, and Manage Profiles opens it again
 - [x] Renaming a profile works from the management window
 - [x] Blank and duplicate labels are refused
-- [ ] Deleting a profile works from the management window
-- [ ] Tray liveness marker updates after quitting Claude Desktop by hand
-- [ ] A newly added profile appears in the tray immediately
-- [ ] A second profile launches alongside Default and both stay usable through the app
+- [x] Deleting a profile works from the management window
+- [x] Tray liveness marker updates after quitting Claude Desktop by hand
+- [x] A newly added profile appears in the tray immediately
+- [x] A second profile launches alongside Default and both stay usable through the app — two Claude Desktop instances running in parallel, which is the whole point of this app
 - [ ] Deletion is refused while that profile is running
 - [ ] The delete confirmation shows the directory size
 
