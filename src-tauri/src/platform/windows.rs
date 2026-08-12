@@ -1,3 +1,7 @@
+//! Compiled on every platform so its tests keep running, but the code that
+//! calls these helpers is the Windows `Platform` impl, which exists only there.
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 

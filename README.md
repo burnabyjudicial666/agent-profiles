@@ -1,5 +1,7 @@
 # Claude Profiles
 
+> **Unofficial.** This is a third-party tool with no affiliation to, endorsement by, or support from Anthropic. "Claude" and "Claude Desktop" are trademarks of Anthropic. This project only launches the Claude Desktop you already installed, with a different user-data directory.
+
 Claude Profiles is a menu bar and system tray app for running multiple Claude Desktop instances in parallel, with one profile per account. Each profile has its own permanently separate Electron user-data directory, so using one account does not require signing out of another.
 
 The **Default** profile is the Claude Desktop installation that already exists on the machine. Claude Profiles uses that profile in place: it does not move or copy the directory, and launches it without a `--user-data-dir` argument. Additional profiles live below the Claude Profiles data root and receive their own user-data directories.
@@ -112,4 +114,15 @@ Create an unsigned local bundle for the current platform:
 pnpm tauri build
 ```
 
-The project is not packaged, signed, or notarized for distribution by this repository.
+## Installing a release build
+
+Releases are **unsigned**, because code-signing certificates cost money this project does not have. The operating system will therefore object, and the objection is misleading in both cases:
+
+- **macOS** claims the app "is damaged and can't be opened". It is not damaged; it is merely unsigned. Right-click the app and choose **Open**, then confirm. If macOS still refuses, clear the quarantine flag: `xattr -d com.apple.quarantine "/Applications/Claude Profiles.app"`
+- **Windows** shows a SmartScreen warning about an unknown publisher. Choose **More info → Run anyway**.
+
+Only do this for a build you obtained from this project's Releases page. If either warning appears for a download from anywhere else, it deserves your suspicion.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

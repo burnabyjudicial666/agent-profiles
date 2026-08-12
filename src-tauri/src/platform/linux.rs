@@ -1,3 +1,7 @@
+//! Compiled on every platform so its tests keep running, but the code that
+//! calls these helpers is the Linux `Platform` impl, which exists only there.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use crate::profile_store::Profile;
 use std::path::{Path, PathBuf};
 

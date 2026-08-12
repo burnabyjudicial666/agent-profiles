@@ -28,7 +28,7 @@ pub enum FocusOutcome {
     /// Only Linux ever returns this, for Wayland's refusal to let one app raise
     /// another's window. The other backends compile it away, hence the allow —
     /// it is unreachable on this platform, not unused in the codebase.
-    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Unsupported(String),
 }
 

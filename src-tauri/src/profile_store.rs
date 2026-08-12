@@ -159,7 +159,7 @@ mod tests {
         let (_d, paths, def) = fixture();
         let corrupt_bytes = b"{ not json";
         std::fs::create_dir_all(paths.profiles_json().parent().unwrap()).unwrap();
-        std::fs::write(&paths.profiles_json(), corrupt_bytes).unwrap();
+        std::fs::write(paths.profiles_json(), corrupt_bytes).unwrap();
 
         let store = ProfileStore::load(&paths, &def).unwrap();
 
