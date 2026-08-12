@@ -124,9 +124,11 @@ pub fn run() {
                 }
             }
         })
-        .on_tray_icon_event(|app, _event| {
-            if let Err(error) = tray::rebuild(app) {
-                eprintln!("tray rebuild failed: {error}");
+        .on_tray_icon_event(|app, event| {
+            if tray::should_rebuild_for_event(&event) {
+                if let Err(error) = tray::rebuild(app) {
+                    eprintln!("tray rebuild failed: {error}");
+                }
             }
         })
         .setup(|app| {

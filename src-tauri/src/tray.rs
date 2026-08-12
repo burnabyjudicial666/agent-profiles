@@ -99,6 +99,22 @@ pub fn menu_rows(
     rows
 }
 
+pub(crate) fn should_rebuild_for_event(event: &tauri::tray::TrayIconEvent) -> bool {
+    matches!(event, tauri::tray::TrayIconEvent::Click { .. })
+}
+
+pub(crate) fn refresh_account_uuids(store: &mut ProfileStore) -> bool {
+    let mut changed = false;
+    for profile in store.list().to_vec() {
+        let uuid = crate::account::read_account_uuid(&profile.path);
+        if profile.last_known_account_uuid != uuid {
+            store.set_account_uuid(&profile.id, uuid);
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn rebuild(app: &tauri::AppHandle) -> Result<()> {
     rebuild_with_error(app, None)
 }
@@ -117,11 +133,9 @@ pub(crate) fn rebuild_with_error(
             .lock()
             .map_err(|_| anyhow!("Claude Profiles profile store is unavailable"))?;
 
-        for profile in store.list().to_vec() {
-            let uuid = crate::account::read_account_uuid(&profile.path);
-            store.set_account_uuid(&profile.id, uuid);
+        if refresh_account_uuids(&mut store) {
+            let _ = store.save(&state.paths);
         }
-        let _ = store.save(&state.paths);
 
         let (instances, scan_error) = scan_instances(state.platform.running_instances());
         let binary_error = state
@@ -286,6 +300,79 @@ mod tests {
             reason.as_deref(),
             Some("Could not scan running Claude Desktop instances: process list unavailable")
         );
+    }
+
+    #[test]
+    fn only_click_events_request_a_rebuild() {
+        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+        use tauri::{PhysicalPosition, Rect};
+
+        let id: tauri::tray::TrayIconId = "main".into();
+        let position = PhysicalPosition::new(0.0, 0.0);
+        let click = TrayIconEvent::Click {
+            id: id.clone(),
+            position,
+            rect: Rect::default(),
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+        };
+        assert!(should_rebuild_for_event(&click));
+
+        let other_events = [
+            TrayIconEvent::DoubleClick {
+                id: id.clone(),
+                position,
+                rect: Rect::default(),
+                button: MouseButton::Left,
+            },
+            TrayIconEvent::Enter {
+                id: id.clone(),
+                position,
+                rect: Rect::default(),
+            },
+            TrayIconEvent::Move {
+                id: id.clone(),
+                position,
+                rect: Rect::default(),
+            },
+            TrayIconEvent::Leave {
+                id,
+                position,
+                rect: Rect::default(),
+            },
+        ];
+        assert!(other_events
+            .iter()
+            .all(|event| !should_rebuild_for_event(event)));
+    }
+
+    #[test]
+    fn refreshing_account_uuids_reports_only_actual_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = Paths::new(d.path().join("root"));
+        let def = d.path().join("stock");
+        std::fs::create_dir_all(&def).unwrap();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        store.add("Kerja", &paths).unwrap();
+
+        assert!(!refresh_account_uuids(&mut store));
+
+        let profile = store.list()[1].clone();
+        std::fs::write(
+            profile.path.join("config.json"),
+            r#"{"lastKnownAccountUuid":"abc-123"}"#,
+        )
+        .unwrap();
+        assert!(refresh_account_uuids(&mut store));
+        assert_eq!(
+            store
+                .get(&profile.id)
+                .unwrap()
+                .last_known_account_uuid
+                .as_deref(),
+            Some("abc-123")
+        );
+        assert!(!refresh_account_uuids(&mut store));
     }
 
     #[test]
