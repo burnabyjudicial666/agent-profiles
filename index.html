@@ -2,17 +2,47 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/src/favicon.png" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f0e8" />
     <title>Claude Profiles</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <link rel="icon" type="image/png" href="/src/favicon.png" />
   </head>
-
   <body>
     <main class="container">
-      <h1>Claude Profiles</h1>
-      <p>Manage your Claude Desktop profiles from the tray.</p>
+      <header class="page-header">
+        <div class="brand-mark" aria-hidden="true"><span>cp</span></div>
+        <div>
+          <p class="eyebrow">Profile cabinet</p>
+          <h1>Claude Profiles</h1>
+          <p class="lede">Keep each Claude Desktop workspace separate and ready to open.</p>
+        </div>
+      </header>
+
+      <section class="profiles-section" aria-labelledby="profiles-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Your workspaces</p>
+            <h2 id="profiles-heading">Profiles</h2>
+          </div>
+          <span id="profile-count" class="count-badge" aria-live="polite">0</span>
+        </div>
+        <div id="error" class="error" role="alert" hidden></div>
+        <ul id="profiles" class="profile-list" aria-live="polite"></ul>
+      </section>
+
+      <section class="add-section" aria-labelledby="add-heading">
+        <div>
+          <p class="eyebrow">Make room for another sign-in</p>
+          <h2 id="add-heading">Add a profile</h2>
+          <p class="helper">Choose a label you will recognize. Account details stay inside Claude Desktop.</p>
+        </div>
+        <form id="add-profile-form" class="add-form">
+          <label class="sr-only" for="new-label">Profile label</label>
+          <input id="new-label" name="label" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Work" required />
+          <button type="submit" class="button button-primary">Add profile</button>
+        </form>
+      </section>
     </main>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

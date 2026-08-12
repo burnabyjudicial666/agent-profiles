@@ -2621,7 +2621,7 @@ git commit -m "feat: tray menu with live instance state"
 
 **Files:**
 - Create: `src-tauri/src/commands.rs`
-- Modify: `src-tauri/src/lib.rs`, `src/index.html`, `src/main.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`
+- Modify: `src-tauri/src/lib.rs`, `index.html`, `src/main.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`
 
 **Interfaces:**
 - Consumes: `AppState`, `profile_store`, `account`, `platform`
@@ -2753,7 +2753,7 @@ Expected: 1 passed.
 
 - [ ] **Step 5: Build the window UI**
 
-`src/index.html`: a heading "Claude Profiles", a list container `<ul id="profiles">`, an `<input id="new-label">` with an "Add profile" button, and an empty `<div id="error">`.
+`index.html` (the repo root — this is Vite's entry point; a file at `src/index.html` is never served): a heading "Claude Profiles", a list container `<ul id="profiles">`, an `<input id="new-label">` with an "Add profile" button, and an empty `<div id="error">`.
 
 `src/main.ts`: on load call `invoke("list_profiles")` and render each row with its label, its path in small grey text, a "same account" badge when `shares_account`, and Rename / Delete buttons (both hidden when `is_default`). Rename uses `prompt()`. Delete calls `profile_size_bytes` first and confirms with the human-readable size in the message. Re-render after every mutation. Show any rejected promise's message in `#error` rather than swallowing it.
 
