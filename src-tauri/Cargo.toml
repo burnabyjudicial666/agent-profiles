@@ -2,7 +2,7 @@
 name = "claude-profiles"
 version = "0.1.0"
 description = "A tray app for managing Claude Desktop profiles"
-authors = ["you"]
+authors = ["Husni Adil Makmur <husni.adil@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
