@@ -29,15 +29,18 @@ The full Rust suite passes on macOS: **64 tests, 0 failures.**
 
 - [x] Rust suite passes, including the Claude Desktop binary and path checks
 - [x] Two Claude Desktop processes launched directly with distinct `--user-data-dir` values both stayed alive (this is the premise the whole app rests on)
-- [ ] Management window opens from the tray, and closing it no longer quits the app
-- [ ] Rename and delete work from the management window
+- [x] The tray menu opens and lists the profiles
+- [x] Management window opens from the tray, and closing it hides the window instead of quitting the app — the tray survives, and Manage Profiles opens it again
+- [x] Renaming a profile works from the management window
+- [x] Blank and duplicate labels are refused
+- [ ] Deleting a profile works from the management window
 - [ ] Tray liveness marker updates after quitting Claude Desktop by hand
 - [ ] A newly added profile appears in the tray immediately
 - [ ] A second profile launches alongside Default and both stay usable through the app
 - [ ] Deletion is refused while that profile is running
 - [ ] The delete confirmation shows the directory size
 
-Automated UI driving was not possible: macOS Accessibility permission has to be granted by a human, so the open boxes need a person.
+The checked boxes were confirmed by a human against the unsigned release build (`0.1.0`, Apple Silicon) on 2026-08-13, not inferred from tests. Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one, so the open boxes still need a person.
 
 ### Windows — never compiled or run
 
