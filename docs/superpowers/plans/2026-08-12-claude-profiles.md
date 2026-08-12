@@ -2554,20 +2554,20 @@ Append `rebuild(app: &tauri::AppHandle) -> Result<()>`. It must:
 
 1. Read `AppState` from `app.state()`.
 2. Refresh account uuids: for each profile, `account::read_account_uuid(&p.path)` → `store.set_account_uuid(...)`, then `store.save(&paths)`, ignoring save errors.
-3. `platform.running_instances()` — on error, treat as an empty list rather than failing the rebuild.
-4. `platform.claude_binary()` — capture `Err(e)` as `Some(e.to_string())` for `binary_error`.
+3. `platform.running_instances()` — on error, use an empty list so rebuild can continue, and add a disabled visible reason row explaining the scan failure.
+4. `platform.claude_binary()` — capture `Err(e)` as `Some(e.to_string())` for `binary_error`; all runtime errors are likewise surfaced as disabled visible reason rows during the rebuild.
 5. Build a `tauri::menu::Menu` from `menu_rows` with `MenuItem::with_id(app, &row.id, &row.text, row.enabled, None::<&str>)`; append a separator, then `manage` / "Manage Profiles…" and `quit_app` / "Quit Claude Profiles".
 6. Attach with `TrayIconBuilder::with_id("main").menu(&menu).build(app)` on first construction, or `tray.set_menu(Some(menu))` on later rebuilds.
 
 In `lib.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
 
 - `launch:<id>` → `instance_manager::launch`, then `rebuild`
-- `focus:<id>` → re-scan, `find_for`, `platform.focus(pid, &profile.id)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild so the row can show the message
-- `quit:<id>` → re-scan, then spawn a thread running `platform.quit(pid)` followed by `rebuild` (it blocks up to 10s and must not stall the tray)
+- `focus:<id>` → re-scan, `find_for`, `platform.focus(pid, &profile.id)`; on `FocusOutcome::Unsupported(msg)` do not fail — log it and rebuild with a disabled visible reason row carrying the message
+- `quit:<id>` → re-scan, then use fallible `std::thread::Builder::spawn` for a worker running `platform.quit(pid)` followed by `rebuild` (it blocks up to 10s and must not stall the tray); log thread-creation failures and best-effort rebuild with a disabled visible reason row
 - `manage` → show the management window (Task 13)
 - `quit_app` → `app.exit(0)`
 
-Every handler wraps its work in a closure returning `Result<()>`; on `Err`, log and rebuild rather than panicking.
+Every handler wraps its work in a closure returning `Result<()>`; on `Err`, log and rebuild with a disabled visible reason row rather than panicking. The pure `menu_rows` contract remains unchanged; rebuild-only runtime and scan errors are supplied as an additional reason to the rebuild layer.
 
 Also call `rebuild` from a `TrayIconEvent` handler so the menu refreshes each time it opens, and once during `setup`.
 

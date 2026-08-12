@@ -18,6 +18,33 @@ pub struct MenuRow {
     pub pid: Option<i32>,
 }
 
+pub(crate) fn combine_error_messages(
+    messages: impl IntoIterator<Item = Option<String>>,
+) -> Option<String> {
+    let mut messages = messages.into_iter().flatten();
+    let first = messages.next()?;
+    Some(
+        std::iter::once(first)
+            .chain(messages)
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+pub(crate) fn scan_instances(
+    result: Result<Vec<RunningInstance>>,
+) -> (Vec<RunningInstance>, Option<String>) {
+    match result {
+        Ok(instances) => (instances, None),
+        Err(error) => (
+            Vec::new(),
+            Some(format!(
+                "Could not scan running Claude Desktop instances: {error}"
+            )),
+        ),
+    }
+}
+
 pub fn menu_rows(
     store: &ProfileStore,
     instances: &[RunningInstance],
@@ -73,11 +100,18 @@ pub fn menu_rows(
 }
 
 pub fn rebuild(app: &tauri::AppHandle) -> Result<()> {
+    rebuild_with_error(app, None)
+}
+
+pub(crate) fn rebuild_with_error(
+    app: &tauri::AppHandle,
+    runtime_error: Option<&str>,
+) -> Result<()> {
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
 
-    let (instances, rows) = {
+    let rows = {
         let mut store = state
             .store
             .lock()
@@ -89,16 +123,16 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<()> {
         }
         let _ = store.save(&state.paths);
 
-        let instances = state.platform.running_instances().unwrap_or_default();
+        let (instances, scan_error) = scan_instances(state.platform.running_instances());
         let binary_error = state
             .platform
             .claude_binary()
             .err()
             .map(|error| error.to_string());
-        let rows = menu_rows(&store, &instances, binary_error.as_deref());
-        (instances, rows)
+        let menu_error =
+            combine_error_messages([runtime_error.map(str::to_string), scan_error, binary_error]);
+        menu_rows(&store, &instances, menu_error.as_deref())
     };
-    let _ = instances;
 
     let menu = tauri::menu::Menu::new(app)?;
     for row in rows {
@@ -242,5 +276,25 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn a_liveness_scan_failure_keeps_the_empty_fallback_and_exposes_its_reason() {
+        let (instances, reason) = scan_instances(Err(anyhow::anyhow!("process list unavailable")));
+        assert!(instances.is_empty());
+        assert_eq!(
+            reason.as_deref(),
+            Some("Could not scan running Claude Desktop instances: process list unavailable")
+        );
+    }
+
+    #[test]
+    fn runtime_and_scan_errors_are_combined_into_one_visible_menu_reason() {
+        let reason = combine_error_messages([
+            Some("launch failed".to_string()),
+            Some("scan failed".to_string()),
+            None,
+        ]);
+        assert_eq!(reason.as_deref(), Some("launch failed; scan failed"));
     }
 }
