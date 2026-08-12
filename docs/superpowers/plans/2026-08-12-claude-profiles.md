@@ -2569,7 +2569,9 @@ In `lib.rs`, register `on_menu_event`. Split the id on `:` and dispatch:
 
 Every handler wraps its work in a closure returning `Result<()>`; on `Err`, log and rebuild with a disabled visible reason row rather than panicking. The pure `menu_rows` contract remains unchanged; rebuild-only runtime and scan errors are supplied as an additional reason to the rebuild layer.
 
-Also call `rebuild` from a `TrayIconEvent` handler so the menu refreshes each time it opens, and once during `setup`.
+Also call `rebuild` from a `TrayIconEvent` handler so the menu refreshes each time it opens, and once during `setup`. **Match on the event and rebuild only for `TrayIconEvent::Click`** — the handler also receives `Enter`, `Move` and `Leave`, and `Move` fires continuously while the pointer crosses the icon. Rebuilding on every one of those would run a full process scan and rewrite `profiles.json` dozens of times per second, for a menu nobody opened.
+
+For the same reason `rebuild` must not write the registry unconditionally. It refreshes each profile's account uuid before drawing, but should call `store.save` only when a uuid actually changed; otherwise every glance at the tray becomes a disk write.
 
 Add one more function beside it, and call it from `setup` **before** the first
 rebuild:
