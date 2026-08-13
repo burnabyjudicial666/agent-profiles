@@ -1,3 +1,13 @@
+<p align="center">
+  <img src="assets/banner.png" alt="Claude Profiles — run several Claude Desktop accounts side by side, one profile each" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/husniadil/claude-profiles/actions/workflows/ci.yml"><img src="https://github.com/husniadil/claude-profiles/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT licence"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platforms">
+</p>
+
 # Claude Profiles
 
 > **Unofficial.** This is a third-party tool with no affiliation to, endorsement by, or support from Anthropic. "Claude" and "Claude Desktop" are trademarks of Anthropic. This project only launches the Claude Desktop you already installed, with a different user-data directory.
