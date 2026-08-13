@@ -9,6 +9,32 @@ pub struct AppState {
     pub platform: Box<dyn Platform>,
     pub paths: Paths,
     pub store: Mutex<ProfileStore>,
+    /// What the tray menu currently shows. Replacing an attached menu closes it
+    /// if it happens to be open, so we only replace it when it would differ.
+    pub last_menu: Mutex<Option<Vec<MenuSignature>>>,
+}
+
+pub type MenuSignature = (String, String, bool);
+
+pub(crate) fn signature(rows: &[MenuRow]) -> Vec<MenuSignature> {
+    rows.iter()
+        .map(|r| (r.id.clone(), r.text.clone(), r.enabled))
+        .collect()
+}
+
+/// macOS delivers tray events inconsistently across versions: some send only
+/// `Enter` before a menu opens, others also send `Click` once it is already
+/// open. Rebuilding on the latter swapped the menu out from under the user,
+/// and macOS closes an attached menu the moment it is replaced — the menu
+/// appeared and vanished, over and over. So: replace only on a real change.
+pub(crate) fn should_replace_menu(
+    previous: Option<&[MenuSignature]>,
+    next: &[MenuSignature],
+) -> bool {
+    match previous {
+        None => true,
+        Some(previous) => previous != next,
+    }
 }
 
 /// Deliberately carries no pid. A pid captured while the menu was being built can
@@ -155,6 +181,22 @@ pub(crate) fn rebuild_with_error(
             combine_error_messages([runtime_error.map(str::to_string), scan_error, binary_error]);
         menu_rows(&store, &instances, menu_error.as_deref())
     };
+
+    // Bail out before touching AppKit at all when nothing would change. This is
+    // the whole fix for the flickering menu: a rebuild triggered by a click that
+    // arrives after the menu is already open now does nothing at all.
+    let next = signature(&rows);
+    {
+        let mut last = state
+            .last_menu
+            .lock()
+            .map_err(|_| anyhow!("Claude Profiles menu state is unavailable"))?;
+        let tray_exists = app.tray_by_id("main").is_some();
+        if tray_exists && !should_replace_menu(last.as_deref(), &next) {
+            return Ok(());
+        }
+        *last = Some(next);
+    }
 
     let menu = tauri::menu::Menu::new(app)?;
     for row in rows {
@@ -353,6 +395,39 @@ mod tests {
         assert!(other_events
             .iter()
             .all(|event| !should_rebuild_for_event(event)));
+    }
+
+    #[test]
+    fn an_unchanged_menu_is_never_replaced() {
+        let (_d, store) = store_with_one_extra();
+        let rows = menu_rows(&store, &[], None);
+        let first = signature(&rows);
+
+        // The very first build has nothing to compare against, so it must happen.
+        assert!(should_replace_menu(None, &first));
+
+        // A second pass over identical state must not touch the menu: replacing an
+        // attached menu on macOS closes it, which is what made it flicker.
+        let same = signature(&menu_rows(&store, &[], None));
+        assert!(!should_replace_menu(Some(&first), &same));
+    }
+
+    #[test]
+    fn a_profile_going_live_does_replace_the_menu() {
+        let (_d, store) = store_with_one_extra();
+        let kerja = store.list()[1].clone();
+        let stopped = signature(&menu_rows(&store, &[], None));
+
+        let running = signature(&menu_rows(
+            &store,
+            &[RunningInstance {
+                pid: 777,
+                user_data_dir: Some(kerja.path.clone()),
+            }],
+            None,
+        ));
+
+        assert!(should_replace_menu(Some(&stopped), &running));
     }
 
     #[test]

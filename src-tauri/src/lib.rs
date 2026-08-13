@@ -208,6 +208,7 @@ pub fn run() {
                 platform,
                 paths,
                 store: std::sync::Mutex::new(store),
+                last_menu: std::sync::Mutex::new(None),
             });
 
             if let Some(state) = app.try_state::<tray::AppState>() {
