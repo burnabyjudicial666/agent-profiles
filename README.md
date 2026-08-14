@@ -147,17 +147,17 @@ Confirmed by a human driving a development build with all six apps installed, on
 - [x] Adding a profile from the management window, including the app picker that appears only with more than one app installed
 - [x] Deleting a profile from the management window
 - [x] A duplicate label is refused, and the refusal appears beside the form that caused it
+- [x] Renaming a profile from the management window
+- [x] A blank label is refused
+- [x] Deletion is refused while that profile is running, and the confirmation shows the directory size
+- [x] The window refuses to be resized below its usable minimum
 - [x] Tray liveness marker follows an app being launched and quit
 
-Carried over from the `0.1.0` acceptance run on 2026-08-13 and **not** re-exercised since the restructure. Unchecked means unobserved on this build, not suspected broken:
+One box remains, and it cannot be closed before a release exists:
 
-- [ ] Renaming a profile from the management window
-- [ ] A blank label is refused
-- [ ] Deletion is refused while that profile is running, and the confirmation shows the directory size
-- [ ] The window refuses to be resized below its usable minimum
 - [ ] The Launch at login toggle registers and removes a login item, and survives a reboot
 
-That last one cannot be exercised from a development build at all: the toggle is deliberately hidden there, because a login item registered from `pnpm start` would point at a `target/debug` binary that moves. It needs an installed release build and a reboot.
+The toggle is deliberately hidden in development builds, because a login item registered from `pnpm start` would point at a `target/debug` binary that moves, gets rebuilt, and disappears on `cargo clean`. Closing this box needs an installed release build and a real reboot.
 
 Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one. These boxes still need a person.
 
