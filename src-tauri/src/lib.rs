@@ -33,7 +33,7 @@ fn live_pid(app: &tauri::AppHandle, app_id: &str, profile_id: &str) -> Result<i3
     let processes = state.platform.scan(&[instance_manager::scan_target(
         &*state.platform,
         runtime.spec,
-    )])?;
+    )?])?;
     find_for(
         &processes,
         runtime.spec.id,

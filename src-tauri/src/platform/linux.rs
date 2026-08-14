@@ -113,12 +113,8 @@ mod imp {
             Ok(PathBuf::from(path))
         }
 
-        fn process_marker(&self, locations: &Locations) -> String {
-            locations
-                .linux
-                .as_ref()
-                .map(|l| l.command.to_string())
-                .unwrap_or_default()
+        fn process_marker(&self, locations: &Locations) -> Result<String> {
+            Ok(here(locations, "this app")?.command.to_string())
         }
 
         fn scan(&self, targets: &[ScanTarget]) -> Result<Vec<RunningProcess>> {

@@ -49,7 +49,7 @@ pub(crate) fn refuse_if_running(
     spec: &'static AppSpec,
     profile: &Profile,
 ) -> anyhow::Result<()> {
-    let processes = platform.scan(&[crate::instance_manager::scan_target(platform, spec)])?;
+    let processes = platform.scan(&[crate::instance_manager::scan_target(platform, spec)?])?;
     if find_for(&processes, spec.id, &profile.path, profile.is_default).is_some() {
         anyhow::bail!("quit this profile's {} before deleting it", spec.product);
     }

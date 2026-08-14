@@ -57,12 +57,8 @@ impl Platform for MacOs {
         Ok(bin)
     }
 
-    fn process_marker(&self, locations: &Locations) -> String {
-        locations
-            .macos
-            .as_ref()
-            .map(|l| l.binary.to_string())
-            .unwrap_or_default()
+    fn process_marker(&self, locations: &Locations) -> Result<String> {
+        Ok(here(locations, "this app")?.binary.to_string())
     }
 
     fn scan(&self, targets: &[ScanTarget]) -> Result<Vec<RunningProcess>> {
@@ -136,6 +132,24 @@ mod tests {
                     .default_profile
             ),
             PathBuf::from("/Users/h/.codex")
+        );
+    }
+
+    #[test]
+    fn an_app_not_declared_here_yields_no_marker_rather_than_an_empty_one() {
+        // An empty marker is a substring of every line of the process table, so
+        // the tempting default would attribute the first process on the machine
+        // to this app: every profile would read as running, launching would be
+        // refused forever, and Quit would signal a stranger.
+        let undeclared = crate::app_spec::Locations {
+            macos: None,
+            linux: None,
+            windows: None,
+        };
+        assert!(MacOs.process_marker(&undeclared).is_err());
+        assert_eq!(
+            MacOs.process_marker(&app_spec::CLAUDE.locations).unwrap(),
+            "/Applications/Claude.app/Contents/MacOS/Claude"
         );
     }
 

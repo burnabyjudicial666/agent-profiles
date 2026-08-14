@@ -235,7 +235,7 @@ pub(crate) fn rebuild_with_error(
             targets.push(crate::instance_manager::scan_target(
                 &*state.platform,
                 runtime.spec,
-            ));
+            )?);
         }
         sections.push(AppSection {
             spec: runtime.spec,

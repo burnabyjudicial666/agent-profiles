@@ -300,8 +300,8 @@ pub mod tests_support {
         fn binary(&self, _locations: &Locations, _product: &str) -> anyhow::Result<PathBuf> {
             Ok(PathBuf::from("/fake/app"))
         }
-        fn process_marker(&self, _locations: &Locations) -> String {
-            "/fake/app".into()
+        fn process_marker(&self, _locations: &Locations) -> anyhow::Result<String> {
+            Ok("/fake/app".into())
         }
         fn scan(&self, _targets: &[ScanTarget]) -> anyhow::Result<Vec<RunningProcess>> {
             if self.scan_fails {

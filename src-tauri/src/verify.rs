@@ -43,7 +43,7 @@ fn report_what_the_tray_would_show() {
                 .display()
         );
         if unavailable.is_none() {
-            targets.push(instance_manager::scan_target(&*platform, rt.spec));
+            targets.push(instance_manager::scan_target(&*platform, rt.spec).expect("marker"));
         }
         sections.push(AppSection {
             spec: rt.spec,
@@ -105,7 +105,7 @@ fn launch_detect_and_quit_a_real_profile() {
     println!("launched pid {pid}");
 
     // Give Electron a moment to become visible in the process table.
-    let target = instance_manager::scan_target(&*platform, rt.spec);
+    let target = instance_manager::scan_target(&*platform, rt.spec).expect("marker");
     let mut found = None;
     for _ in 0..30 {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -176,7 +176,7 @@ fn both_apps_run_side_by_side_without_being_confused() {
 
     let targets: Vec<_> = apps
         .iter()
-        .map(|rt| instance_manager::scan_target(&*platform, rt.spec))
+        .map(|rt| instance_manager::scan_target(&*platform, rt.spec).expect("marker"))
         .collect();
 
     // One sweep has to find both, each under its own app id.

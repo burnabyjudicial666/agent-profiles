@@ -83,7 +83,13 @@ pub trait Platform: Send + Sync {
     fn binary(&self, locations: &Locations, product: &str) -> Result<PathBuf>;
 
     /// The substring that identifies this app in the process table.
-    fn process_marker(&self, locations: &Locations) -> String;
+    ///
+    /// Fallible because the honest answer for an app not declared here is "there
+    /// isn't one" — and the tempting default, an empty string, is a substring of
+    /// every line of the process table. That would attribute the first process
+    /// on the machine to this app, report every profile as running, and aim the
+    /// tray's Quit row at a stranger.
+    fn process_marker(&self, locations: &Locations) -> Result<String>;
 
     /// One sweep of the process table, covering every target at once.
     fn scan(&self, targets: &[ScanTarget]) -> Result<Vec<RunningProcess>>;

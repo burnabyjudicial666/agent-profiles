@@ -109,8 +109,8 @@ mod tests {
         fn binary(&self, _locations: &Locations, product: &str) -> Result<PathBuf> {
             Err(anyhow!("{product} was not found"))
         }
-        fn process_marker(&self, locations: &Locations) -> String {
-            locations.macos.as_ref().unwrap().binary.to_string()
+        fn process_marker(&self, locations: &Locations) -> Result<String> {
+            Ok(locations.macos.as_ref().unwrap().binary.to_string())
         }
         fn scan(&self, _targets: &[ScanTarget]) -> Result<Vec<RunningProcess>> {
             Ok(Vec::new())
@@ -172,7 +172,7 @@ mod tests {
             fn binary(&self, _l: &Locations, _p: &str) -> Result<PathBuf> {
                 unreachable!()
             }
-            fn process_marker(&self, _l: &Locations) -> String {
+            fn process_marker(&self, _l: &Locations) -> Result<String> {
                 unreachable!()
             }
             fn scan(&self, _t: &[ScanTarget]) -> Result<Vec<RunningProcess>> {

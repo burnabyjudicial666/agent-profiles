@@ -119,12 +119,8 @@ mod imp {
             })
         }
 
-        fn process_marker(&self, locations: &Locations) -> String {
-            locations
-                .windows
-                .as_ref()
-                .map(|l| l.process_name.to_string())
-                .unwrap_or_default()
+        fn process_marker(&self, locations: &Locations) -> Result<String> {
+            Ok(here(locations, "this app")?.process_name.to_string())
         }
 
         fn scan(&self, targets: &[ScanTarget]) -> Result<Vec<RunningProcess>> {

@@ -5,12 +5,12 @@ use crate::profile_store::Profile;
 use anyhow::{anyhow, Result};
 
 /// What a scan must look for to recognise this app's processes.
-pub fn scan_target(platform: &dyn Platform, spec: &'static AppSpec) -> ScanTarget {
-    ScanTarget {
+pub fn scan_target(platform: &dyn Platform, spec: &'static AppSpec) -> Result<ScanTarget> {
+    Ok(ScanTarget {
         app_id: spec.id,
-        marker: platform.process_marker(&spec.locations),
+        marker: platform.process_marker(&spec.locations)?,
         flag: spec.readback_flag(),
-    }
+    })
 }
 
 /// The arguments a launch carries, in the order they must appear.
@@ -77,7 +77,7 @@ pub fn launch(
     // exists to prevent. Refusing costs the user one retry; guessing costs them
     // their profile.
     let running = platform
-        .scan(&[scan_target(platform, spec)])
+        .scan(&[scan_target(platform, spec)?])
         .map_err(|error| {
             anyhow!(
                 "could not check whether {} is already running ({error}); \
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn a_scan_target_asks_for_the_flag_the_app_is_read_back_from() {
-        let target = scan_target(&FakePlatform::default(), &app_spec::CODEX);
+        let target = scan_target(&FakePlatform::default(), &app_spec::CODEX).unwrap();
         assert_eq!(target.app_id, "codex");
         assert_eq!(target.flag, "--user-data-dir=");
     }
