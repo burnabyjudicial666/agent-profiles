@@ -156,6 +156,11 @@ function render(apps: AppView[]): void {
     for (const app of apps) {
       appsContainer.append(makeTextElement("p", "helper", app.unavailable ?? ""));
     }
+    // Clear the picker on the way out. Returning early used to leave whichever
+    // options the last render built, so submitting the form after the only
+    // installed app disappeared would create a profile directory for an app
+    // that is no longer there to launch it.
+    renderAppChoices([]);
     return;
   }
 
@@ -191,6 +196,11 @@ function renderAppChoices(available: AppView[]): void {
   }
   const picker = profileAppSelect.closest(".app-picker") as HTMLElement | null;
   if (picker) picker.hidden = available.length < 2;
+  // With nothing to add a profile to, the whole section goes: a heading over an
+  // empty space reads as something failing to load, and the form beneath it is a
+  // control that could only fail.
+  const section = profileForm.closest("section") as HTMLElement | null;
+  if (section) section.hidden = available.length === 0;
 }
 
 /// Rename and delete both used to call `window.prompt` / `window.confirm`.
