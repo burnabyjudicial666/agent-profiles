@@ -4,10 +4,14 @@ mod commands;
 mod instance_manager;
 mod paths;
 mod platform;
+#[cfg(test)]
+mod probe;
 mod profile_store;
 mod runtime;
 mod shared_config;
 mod tray;
+#[cfg(test)]
+mod verify;
 
 use crate::platform::{find_for, wm_class, FocusHint};
 use crate::runtime::AppState;
