@@ -33,6 +33,46 @@ Run what CI runs:
 pnpm check
 ```
 
+That covers the platform you are on. The two below let you cover the other ones from a Mac before CI does, which is worth the trouble: the Linux recipe caught a `-D warnings` failure that had been sitting in this repository unnoticed, because the commit that introduced it had never been pushed.
+
+### Checking the Windows build from macOS
+
+Tauri's build script compiles a Windows resource file, so it needs `llvm-rc`:
+
+```bash
+brew install llvm
+export PATH="$(brew --prefix llvm)/bin:$PATH"
+rustup target add x86_64-pc-windows-msvc
+
+cd src-tauri
+cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+```
+
+This type-checks and lints everything, tests included, but it cannot **run** them: there is no linking and no Windows to run on. It catches a Windows-only compile error in seconds instead of after a push.
+
+### Running the Linux gate in a container
+
+Cross-compiling to Linux needs a whole sysroot — GTK, dbus, webkit — so use a container instead and get the real thing: compiled, linted, and the tests actually executed.
+
+```bash
+docker run --rm -v "$PWD:/src:ro" ubuntu:22.04 bash -c '
+  apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+    build-essential curl wget file libssl-dev libgtk-3-dev libxdo-dev \
+    pkg-config ca-certificates >/dev/null
+  curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    --default-toolchain stable --component rustfmt,clippy >/dev/null
+  . "$HOME/.cargo/env"
+  # The build script writes inside the source tree, so work on a copy and
+  # leave the host checkout alone. It needs ../dist, so run `pnpm build` first.
+  mkdir -p /build && cp -a /src/src-tauri /src/dist /build/ && cd /build/src-tauri
+  export CARGO_TARGET_DIR=/tmp/target
+  cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+'
+```
+
+Ubuntu 22.04 is the distribution CI pins, and the container is architecture-native, so on Apple Silicon this is an arm64 Linux rather than the amd64 one CI uses. That difference has never mattered for this code, which contains nothing architecture-specific — but it is a difference, and a container is still not a desktop. It proves the code builds and its tests pass on Linux. It proves nothing about the tray, the window, or `xdotool`.
+
 One command, so there is no chance of running a weaker check than CI does: it is the frontend build, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, stopping at the first failure. The build is expected to be warning-free. If your change adds a warning, resolve it rather than leaving it for someone else to wonder about.
 
 ## Tests
