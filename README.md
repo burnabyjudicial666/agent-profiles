@@ -211,11 +211,15 @@ Agent Profiles probes both and prefers the MSIX package path when both exist. Th
 
 ## Build
 
-This repository uses `pnpm` and a Rust toolchain managed by mise. If the mise shims are not already on `PATH`, prefix Rust commands as follows:
+This repository is built with `pnpm` and a Rust toolchain. Any installation of either will do.
+
+The toolchain here is managed with [mise](https://mise.jdx.dev/), which installs and pins language runtimes per project. If you use mise and its shims are not already on `PATH`, add them first:
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 ```
+
+If your Rust came from [rustup](https://rustup.rs/) or your system package manager, ignore that line — `cargo` is already on your `PATH` and everything below works unchanged.
 
 Install frontend dependencies:
 

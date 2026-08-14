@@ -8,11 +8,15 @@ If you run Windows or Linux, checking one of those boxes with a real report is w
 
 ## Setup
 
-The toolchain is Rust plus `pnpm`. If Rust is managed by mise and its shims are not on `PATH`:
+The toolchain is Rust plus `pnpm`. Install them however you like — nothing here depends on a particular version manager.
+
+This repository happens to be developed with [mise](https://mise.jdx.dev/), a tool that installs and pins language runtimes per project. If you use it and its shims are not already on `PATH`, add them:
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 ```
+
+If you installed Rust with [rustup](https://rustup.rs/) instead, or by any other means, skip that line entirely: `cargo` is already where the commands below expect it.
 
 ```bash
 pnpm install
