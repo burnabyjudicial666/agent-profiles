@@ -5,27 +5,37 @@ import { listen } from "@tauri-apps/api/event";
 
 type ProfileView = {
   id: string;
+  app_id: string;
   label: string;
   path: string;
   is_default: boolean;
   shares_account: boolean;
 };
 
-const profilesElement = document.querySelector<HTMLUListElement>("#profiles");
+type AppView = {
+  id: string;
+  label: string;
+  unavailable: string | null;
+  profiles: ProfileView[];
+};
+
+const appsElement = document.querySelector<HTMLDivElement>("#apps");
 const countElement = document.querySelector<HTMLSpanElement>("#profile-count");
 const errorElement = document.querySelector<HTMLDivElement>("#error");
 const addForm = document.querySelector<HTMLFormElement>("#add-profile-form");
 const labelInput = document.querySelector<HTMLInputElement>("#new-label");
+const appSelect = document.querySelector<HTMLSelectElement>("#new-app");
 
-if (!profilesElement || !countElement || !errorElement || !addForm || !labelInput) {
-  throw new Error("Claude Profiles management window is missing required elements");
+if (!appsElement || !countElement || !errorElement || !addForm || !labelInput || !appSelect) {
+  throw new Error("Agent Profiles management window is missing required elements");
 }
 
-const profilesList = profilesElement;
+const appsContainer = appsElement;
 const profileCount = countElement;
 const errorBox = errorElement;
 const profileForm = addForm;
 const profileLabelInput = labelInput;
+const profileAppSelect = appSelect;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -53,64 +63,110 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
 }
 
-function makeTextElement(tag: "h3" | "p" | "span", className: string, text: string): HTMLElement {
+function makeTextElement(tag: "h3" | "h4" | "p" | "span", className: string, text: string): HTMLElement {
   const element = document.createElement(tag);
   element.className = className;
   element.textContent = text;
   return element;
 }
 
-function render(profiles: ProfileView[]): void {
-  profilesList.replaceChildren();
-  profileCount.textContent = String(profiles.length);
+function profileCard(profile: ProfileView, position: number): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "profile-card";
 
-  for (const profile of profiles) {
-    const item = document.createElement("li");
-    item.className = "profile-card";
-
-    const index = makeTextElement("span", "profile-index", String(profiles.indexOf(profile) + 1).padStart(2, "0"));
-    const content = document.createElement("div");
-    content.className = "profile-content";
-    const title = document.createElement("div");
-    title.className = "profile-title";
-    title.append(makeTextElement("h3", "profile-label", profile.label));
-    if (profile.is_default) {
-      title.append(makeTextElement("span", "status-badge status-default", "Default"));
-    }
-    if (profile.shares_account) {
-      title.append(makeTextElement("span", "status-badge status-warning", "same account"));
-    }
-    content.append(title);
-    // The path is ellipsised to keep rows one line tall, so the full value has to
-    // stay reachable — it is the only thing distinguishing two similar profiles.
-    const path = makeTextElement("p", "profile-path", profile.path);
-    path.title = profile.path;
-    content.append(path);
-
-    const actions = document.createElement("div");
-    actions.className = "profile-actions";
-
-    const renameButton = document.createElement("button");
-    renameButton.className = "button button-quiet";
-    renameButton.type = "button";
-    renameButton.textContent = "Rename";
-    renameButton.addEventListener("click", () => startRename(profile, content));
-    actions.append(renameButton);
-
-    // The Default profile is the existing Claude Desktop installation, so its
-    // directory is never ours to delete. Its label is still just a label.
-    if (!profile.is_default) {
-      const deleteButton = document.createElement("button");
-      deleteButton.className = "button button-danger";
-      deleteButton.type = "button";
-      deleteButton.textContent = "Delete";
-      deleteButton.addEventListener("click", () => startDelete(profile, content));
-      actions.append(deleteButton);
-    }
-
-    item.append(index, content, actions);
-    profilesList.append(item);
+  const index = makeTextElement("span", "profile-index", String(position).padStart(2, "0"));
+  const content = document.createElement("div");
+  content.className = "profile-content";
+  const title = document.createElement("div");
+  title.className = "profile-title";
+  title.append(makeTextElement("h3", "profile-label", profile.label));
+  if (profile.is_default) {
+    title.append(makeTextElement("span", "status-badge status-default", "Default"));
   }
+  if (profile.shares_account) {
+    title.append(makeTextElement("span", "status-badge status-warning", "same account"));
+  }
+  content.append(title);
+  // The path is ellipsised to keep rows one line tall, so the full value has to
+  // stay reachable — it is the only thing distinguishing two similar profiles.
+  const path = makeTextElement("p", "profile-path", profile.path);
+  path.title = profile.path;
+  content.append(path);
+
+  const actions = document.createElement("div");
+  actions.className = "profile-actions";
+
+  const renameButton = document.createElement("button");
+  renameButton.className = "button button-quiet";
+  renameButton.type = "button";
+  renameButton.textContent = "Rename";
+  renameButton.addEventListener("click", () => startRename(profile, content));
+  actions.append(renameButton);
+
+  // The Default profile is the app's own existing installation, so its directory
+  // is never ours to delete. Its label is still just a label.
+  if (!profile.is_default) {
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "button button-danger";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", () => startDelete(profile, content));
+    actions.append(deleteButton);
+  }
+
+  item.append(index, content, actions);
+  return item;
+}
+
+function render(apps: AppView[]): void {
+  appsContainer.replaceChildren();
+
+  const available = apps.filter((app) => app.unavailable === null);
+  profileCount.textContent = String(
+    available.reduce((total, app) => total + app.profiles.length, 0),
+  );
+
+  // Nothing installed is the only case worth explaining. With one app working,
+  // the other's absence is not an error — it is simply not installed.
+  if (available.length === 0) {
+    for (const app of apps) {
+      appsContainer.append(makeTextElement("p", "helper", app.unavailable ?? ""));
+    }
+    return;
+  }
+
+  for (const app of available) {
+    const group = document.createElement("section");
+    group.className = "app-group";
+    // A heading only earns its space once there is a second app to tell apart.
+    if (available.length > 1) {
+      group.append(makeTextElement("h4", "app-heading", app.label));
+    }
+    const list = document.createElement("ul");
+    list.className = "profile-list";
+    app.profiles.forEach((profile, index) => list.append(profileCard(profile, index + 1)));
+    group.append(list);
+    appsContainer.append(group);
+  }
+
+  renderAppChoices(available);
+}
+
+// The picker is only a question when there is more than one answer.
+function renderAppChoices(available: AppView[]): void {
+  const previous = profileAppSelect.value;
+  profileAppSelect.replaceChildren();
+  for (const app of available) {
+    const option = document.createElement("option");
+    option.value = app.id;
+    option.textContent = app.label;
+    profileAppSelect.append(option);
+  }
+  if (available.some((app) => app.id === previous)) {
+    profileAppSelect.value = previous;
+  }
+  const picker = profileAppSelect.closest(".app-picker") as HTMLElement | null;
+  if (picker) picker.hidden = available.length < 2;
 }
 
 /// Rename and delete both used to call `window.prompt` / `window.confirm`.
@@ -148,7 +204,7 @@ function startRename(profile: ProfileView, content: HTMLElement): void {
       return;
     }
     try {
-      await invoke("rename_profile", { id: profile.id, label });
+      await invoke("rename_profile", { appId: profile.app_id, id: profile.id, label });
       clearError();
       await loadProfiles();
     } catch (error) {
@@ -166,7 +222,7 @@ async function startDelete(profile: ProfileView, content: HTMLElement): Promise<
 
   let size: number;
   try {
-    size = await invoke<number>("profile_size_bytes", { id: profile.id });
+    size = await invoke<number>("profile_size_bytes", { appId: profile.app_id, id: profile.id });
   } catch (error) {
     showError(error);
     return;
@@ -188,7 +244,7 @@ async function startDelete(profile: ProfileView, content: HTMLElement): Promise<
   confirm.textContent = "Delete permanently";
   confirm.addEventListener("click", async () => {
     try {
-      await invoke("delete_profile", { id: profile.id });
+      await invoke("delete_profile", { appId: profile.app_id, id: profile.id });
       clearError();
       await loadProfiles();
     } catch (error) {
@@ -209,8 +265,8 @@ async function startDelete(profile: ProfileView, content: HTMLElement): Promise<
 
 async function loadProfiles(): Promise<void> {
   try {
-    const profiles = await invoke<ProfileView[]>("list_profiles");
-    render(profiles);
+    const apps = await invoke<AppView[]>("list_apps");
+    render(apps);
     clearError();
   } catch (error) {
     showError(error);
@@ -225,9 +281,14 @@ async function addProfile(event: SubmitEvent): Promise<void> {
     profileLabelInput.focus();
     return;
   }
+  const appId = profileAppSelect.value;
+  if (!appId) {
+    showError("No supported app was found to add a profile to.");
+    return;
+  }
 
   try {
-    await invoke("add_profile", { label });
+    await invoke("add_profile", { appId, label });
     profileLabelInput.value = "";
     await loadProfiles();
   } catch (error) {

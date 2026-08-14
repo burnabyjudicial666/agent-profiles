@@ -2,8 +2,21 @@
 //! calls these helpers is the Windows `Platform` impl, which exists only there.
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
+use crate::app_spec::{WinPath, WinRoot};
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Turns an app's declared locations into real paths. Kept pure — the OS knows
+/// what `%LOCALAPPDATA%` means, the app only knows what hangs off it.
+pub fn expand(paths: &[WinPath], local: &Path, roaming: &Path) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .map(|path| match path.root {
+            WinRoot::Local => local.join(path.rest),
+            WinRoot::Roaming => roaming.join(path.rest),
+        })
+        .collect()
+}
 
 pub fn pick_default_profile(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates
@@ -19,96 +32,103 @@ pub fn pick_binary(candidates: &[PathBuf]) -> Option<PathBuf> {
         .cloned()
 }
 
+pub fn looked_in(candidates: &[PathBuf]) -> String {
+    candidates
+        .iter()
+        .map(|candidate| candidate.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn env_path(var: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(
         std::env::var(var).map_err(|_| anyhow!("{var} is not set"))?,
     ))
 }
 
-pub fn default_profile_candidates() -> Result<Vec<PathBuf>> {
-    let local = env_path("LOCALAPPDATA")?;
-    let roaming = env_path("APPDATA")?;
-    Ok(vec![
-        local
-            .join("Packages")
-            .join("Claude_pzs8sxrjxfjjc")
-            .join("LocalCache")
-            .join("Roaming")
-            .join("Claude"),
-        roaming.join("Claude"),
-    ])
-}
-
-pub fn binary_candidates() -> Result<Vec<PathBuf>> {
-    let local = env_path("LOCALAPPDATA")?;
-    Ok(vec![
-        local.join("AnthropicClaude").join("claude.exe"),
-        local
-            .join("Microsoft")
-            .join("WindowsApps")
-            .join("claude.exe"),
-    ])
-}
-
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
-    use crate::platform::{win_proc, FocusOutcome, Platform, RunningInstance};
-    use std::path::Path;
+    use crate::app_spec::Locations;
+    use crate::platform::{
+        win_proc, FocusHint, FocusOutcome, Platform, RunningProcess, ScanTarget, DATA_DIR_NAME,
+    };
 
     pub struct Windows;
 
+    fn roots() -> Result<(PathBuf, PathBuf)> {
+        Ok((env_path("LOCALAPPDATA")?, env_path("APPDATA")?))
+    }
+
+    fn here<'a>(
+        locations: &'a Locations,
+        product: &str,
+    ) -> Result<&'a crate::app_spec::WindowsLocation> {
+        locations
+            .windows
+            .as_ref()
+            .ok_or_else(|| anyhow!("{product} has not been declared for Windows"))
+    }
+
     impl Platform for Windows {
-        fn data_root(&self) -> Result<PathBuf> {
-            Ok(env_path("APPDATA")?.join("Claude Profiles"))
+        fn declared_here(&self, locations: &Locations) -> bool {
+            locations.windows.is_some()
         }
 
-        fn default_profile_dir(&self) -> Result<PathBuf> {
-            let candidates = default_profile_candidates()?;
+        fn data_root(&self) -> Result<PathBuf> {
+            Ok(env_path("APPDATA")?.join(DATA_DIR_NAME))
+        }
+
+        fn default_profile_dir(&self, locations: &Locations) -> Result<PathBuf> {
+            let (local, roaming) = roots()?;
+            let candidates = expand(
+                here(locations, "this app")?.default_profiles,
+                &local,
+                &roaming,
+            );
             pick_default_profile(&candidates).ok_or_else(|| {
                 anyhow!(
-                    "Claude Desktop's data directory was not found. Looked in: {}",
-                    candidates
-                        .iter()
-                        .map(|candidate| candidate.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "the app's data directory was not found. Looked in: {}",
+                    looked_in(&candidates)
                 )
             })
         }
 
-        fn claude_binary(&self) -> Result<PathBuf> {
-            let candidates = binary_candidates()?;
+        fn binary(&self, locations: &Locations, product: &str) -> Result<PathBuf> {
+            let (local, roaming) = roots()?;
+            let candidates = expand(here(locations, product)?.binaries, &local, &roaming);
             pick_binary(&candidates).ok_or_else(|| {
                 anyhow!(
-                    "Claude Desktop was not found. Looked in: {}",
-                    candidates
-                        .iter()
-                        .map(|candidate| candidate.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "{product} was not found. Looked in: {}",
+                    looked_in(&candidates)
                 )
             })
         }
 
-        fn running_instances(&self) -> Result<Vec<RunningInstance>> {
-            win_proc::scan()
+        fn process_marker(&self, locations: &Locations) -> String {
+            locations
+                .windows
+                .as_ref()
+                .map(|l| l.process_name.to_string())
+                .unwrap_or_default()
         }
 
-        fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> Result<()> {
-            std::fs::hard_link(shared, profile_dir.join(crate::paths::CONFIG_FILENAME)).map_err(
-                |error| {
-                    anyhow!(
-                        "could not link the shared config into {}: {error}. \
-                         Both paths must be on the same drive.",
-                        profile_dir.display()
-                    )
-                },
-            )?;
+        fn scan(&self, targets: &[ScanTarget]) -> Result<Vec<RunningProcess>> {
+            win_proc::scan(targets)
+        }
+
+        fn link(&self, source: &Path, target: &Path) -> Result<()> {
+            std::fs::hard_link(source, target).map_err(|error| {
+                anyhow!(
+                    "could not link the shared config to {}: {error}. \
+                     Both paths must be on the same drive.",
+                    target.display()
+                )
+            })?;
             Ok(())
         }
 
-        fn focus(&self, pid: i32, _profile_id: &str) -> Result<FocusOutcome> {
+        fn focus(&self, pid: i32, _hint: &FocusHint) -> Result<FocusOutcome> {
             // `BOOL` lives in windows-core as of the 0.61 reshuffle; only the
             // handle and message types stayed behind in Win32::Foundation.
             use windows::core::BOOL;
@@ -179,7 +199,47 @@ pub use imp::Windows;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::app_spec;
+
+    #[test]
+    fn declared_locations_expand_against_the_right_environment_root() {
+        let local = Path::new(r"C:\Users\h\AppData\Local");
+        let roaming = Path::new(r"C:\Users\h\AppData\Roaming");
+        let expanded = expand(
+            app_spec::CLAUDE
+                .locations
+                .windows
+                .as_ref()
+                .unwrap()
+                .default_profiles,
+            local,
+            roaming,
+        );
+        assert!(expanded[0].starts_with(local));
+        assert!(expanded[1].starts_with(roaming));
+    }
+
+    #[test]
+    fn an_app_declared_for_windows_says_where_to_look() {
+        // An empty candidate list would report "not found. Looked in: " with
+        // nothing after it, which tells the user precisely nothing. Apps not
+        // declared for Windows are skipped: absent is not the same as empty.
+        for spec in app_spec::all() {
+            let Some(windows) = spec.locations.windows.as_ref() else {
+                continue;
+            };
+            assert!(
+                !windows.binaries.is_empty(),
+                "{} declares no Windows binary",
+                spec.id
+            );
+            assert!(
+                !windows.default_profiles.is_empty(),
+                "{} declares no Windows profile directory",
+                spec.id
+            );
+        }
+    }
 
     #[test]
     fn the_first_existing_candidate_wins() {
@@ -212,5 +272,11 @@ mod tests {
         let dir_named_like_exe = d.path().join("claude.exe");
         std::fs::create_dir_all(&dir_named_like_exe).unwrap();
         assert_eq!(pick_binary(&[dir_named_like_exe]), None);
+    }
+
+    #[test]
+    fn the_failure_message_lists_every_place_that_was_tried() {
+        let looked = looked_in(&[PathBuf::from(r"C:\a"), PathBuf::from(r"C:\b")]);
+        assert_eq!(looked, r"C:\a, C:\b");
     }
 }

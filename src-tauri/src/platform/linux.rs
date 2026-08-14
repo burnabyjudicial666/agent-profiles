@@ -2,33 +2,31 @@
 //! calls these helpers is the Linux `Platform` impl, which exists only there.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use crate::profile_store::Profile;
+use crate::platform::DATA_DIR_SLUG;
 use std::path::{Path, PathBuf};
 
-pub const BINARY_NAME: &str = "claude-desktop";
-
-pub fn wm_class(profile_id: &str) -> String {
-    format!("claude-profiles-{profile_id}")
+pub fn desktop_file_path(applications_dir: &Path, wm_class: &str) -> PathBuf {
+    applications_dir.join(format!("{wm_class}.desktop"))
 }
 
-pub fn desktop_file_path(applications_dir: &Path, profile_id: &str) -> PathBuf {
-    applications_dir.join(format!("{}.desktop", wm_class(profile_id)))
-}
-
-pub fn desktop_entry(profile: &Profile, exec: &str, icon: &str) -> String {
+pub fn desktop_entry(
+    app_label: &str,
+    profile_label: &str,
+    exec: &str,
+    icon: &str,
+    wm_class: &str,
+) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=Claude — {label}\n\
-         Comment=Claude Desktop, {label} profile\n\
+         Name={app_label} — {profile_label}\n\
+         Comment={app_label}, {profile_label} profile\n\
          Exec={exec}\n\
          Icon={icon}\n\
          Terminal=false\n\
          Categories=Utility;\n\
          NoDisplay=true\n\
-         StartupWMClass={class}\n",
-        label = profile.label,
-        class = wm_class(&profile.id)
+         StartupWMClass={wm_class}\n",
     )
 }
 
@@ -38,19 +36,20 @@ pub fn is_wayland(session_type: Option<&str>) -> bool {
 
 pub fn data_root_from(xdg_config_home: Option<&str>, home: &str) -> PathBuf {
     match xdg_config_home {
-        Some(path) if !path.is_empty() => PathBuf::from(path).join("claude-profiles"),
-        _ => PathBuf::from(home).join(".config").join("claude-profiles"),
+        Some(path) if !path.is_empty() => PathBuf::from(path).join(DATA_DIR_SLUG),
+        _ => PathBuf::from(home).join(".config").join(DATA_DIR_SLUG),
     }
 }
 
 #[cfg(target_os = "linux")]
 mod imp {
     use super::*;
-    use crate::platform::{unix_ps, FocusOutcome, Platform, RunningInstance};
+    use crate::app_spec::{AppSpec, Locations};
+    use crate::platform::{unix_ps, FocusHint, FocusOutcome, Platform, RunningProcess, ScanTarget};
     use anyhow::{anyhow, Result};
     use std::process::Command;
 
-    const ICON_NAME: &str = "com.husniadil.claude-profiles";
+    const ICON_NAME: &str = "com.husniadil.agent-profiles";
 
     pub struct Linux;
 
@@ -72,27 +71,21 @@ mod imp {
         Ok(home()?.join(".local").join("share").join("applications"))
     }
 
-    fn write_desktop_entry(profile: &Profile, binary: &Path, icon: &Path) -> Result<()> {
-        let directory = applications_dir()?;
-        std::fs::create_dir_all(&directory)?;
-        let exec = format!("{} --class={}", binary.display(), wm_class(&profile.id));
-        std::fs::write(
-            desktop_file_path(&directory, &profile.id),
-            desktop_entry(profile, &exec, &icon.display().to_string()),
-        )?;
-        Ok(())
-    }
-
-    fn remove_desktop_entry(profile_id: &str) -> Result<()> {
-        let path = desktop_file_path(&applications_dir()?, profile_id);
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        }
+    fn here<'a>(
+        locations: &'a Locations,
+        product: &str,
+    ) -> Result<&'a crate::app_spec::LinuxLocation> {
+        locations
+            .linux
+            .as_ref()
+            .ok_or_else(|| anyhow!("{product} has not been declared for Linux"))
     }
 
     impl Platform for Linux {
+        fn declared_here(&self, locations: &Locations) -> bool {
+            locations.linux.is_some()
+        }
+
         fn data_root(&self) -> Result<PathBuf> {
             let home = home()?;
             let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
@@ -102,38 +95,42 @@ mod imp {
             ))
         }
 
-        fn default_profile_dir(&self) -> Result<PathBuf> {
-            Ok(home()?.join(".config").join("Claude"))
+        fn default_profile_dir(&self, locations: &Locations) -> Result<PathBuf> {
+            Ok(home()?.join(here(locations, "this app")?.default_profile))
         }
 
-        fn claude_binary(&self) -> Result<PathBuf> {
-            let output = Command::new("which").arg(BINARY_NAME).output()?;
-            if !output.status.success() {
-                return Err(anyhow!(
-                    "Claude Desktop was not found on PATH as `{BINARY_NAME}`. \
-                     Install it with: sudo apt install claude-desktop"
-                ));
-            }
+        fn binary(&self, locations: &Locations, product: &str) -> Result<PathBuf> {
+            let declared = here(locations, product)?;
+            let command = declared.command;
+            let hint = declared.install_hint;
+            let output = Command::new("which").arg(command).output()?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() {
+            if !output.status.success() || path.is_empty() {
                 return Err(anyhow!(
-                    "Claude Desktop was not found on PATH as `{BINARY_NAME}`. \
-                     Install it with: sudo apt install claude-desktop"
+                    "{product} was not found on PATH as `{command}`. {hint}"
                 ));
             }
             Ok(PathBuf::from(path))
         }
 
-        fn running_instances(&self) -> Result<Vec<RunningInstance>> {
-            unix_ps::scan(&[BINARY_NAME])
+        fn process_marker(&self, locations: &Locations) -> String {
+            locations
+                .linux
+                .as_ref()
+                .map(|l| l.command.to_string())
+                .unwrap_or_default()
         }
 
-        fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> Result<()> {
-            std::os::unix::fs::symlink(shared, profile_dir.join(crate::paths::CONFIG_FILENAME))?;
+        fn scan(&self, targets: &[ScanTarget]) -> Result<Vec<RunningProcess>> {
+            unix_ps::scan(targets)
+        }
+
+        fn link(&self, source: &Path, target: &Path) -> Result<()> {
+            std::os::unix::fs::symlink(source, target)?;
             Ok(())
         }
 
-        fn focus(&self, _pid: i32, profile_id: &str) -> Result<FocusOutcome> {
+        fn focus(&self, _pid: i32, hint: &FocusHint) -> Result<FocusOutcome> {
             if is_wayland(std::env::var("XDG_SESSION_TYPE").ok().as_deref()) {
                 return Ok(FocusOutcome::Unsupported(
                     "Wayland does not let one app raise another's window — use this profile's \
@@ -147,15 +144,15 @@ mod imp {
                         .into(),
                 ));
             }
-            let class = wm_class(profile_id);
             let status = Command::new("xdotool")
-                .args(["search", "--class", &class, "windowactivate"])
+                .args(["search", "--class", hint.wm_class, "windowactivate"])
                 .status()?;
             if status.success() {
                 Ok(FocusOutcome::Focused)
             } else {
                 Ok(FocusOutcome::Unsupported(format!(
-                    "xdotool found no window with class {class}"
+                    "xdotool found no window with class {}",
+                    hint.wm_class
                 )))
             }
         }
@@ -164,17 +161,34 @@ mod imp {
             crate::platform::unix_signal_quit(pid)
         }
 
-        fn extra_launch_args(&self, profile: &Profile) -> Vec<String> {
-            vec![format!("--class={}", wm_class(&profile.id))]
+        fn os_launch_args(&self, wm_class: &str) -> Vec<String> {
+            vec![format!("--class={wm_class}")]
         }
 
-        fn register_identity(&self, profile: &Profile) -> Result<()> {
-            let binary = self.claude_binary()?;
-            write_desktop_entry(profile, &binary, Path::new(ICON_NAME))
+        fn register_identity(
+            &self,
+            spec: &AppSpec,
+            profile_label: &str,
+            wm_class: &str,
+        ) -> Result<()> {
+            let binary = self.binary(&spec.locations, spec.product)?;
+            let directory = applications_dir()?;
+            std::fs::create_dir_all(&directory)?;
+            let exec = format!("{} --class={wm_class}", binary.display());
+            std::fs::write(
+                desktop_file_path(&directory, wm_class),
+                desktop_entry(spec.label, profile_label, &exec, ICON_NAME, wm_class),
+            )?;
+            Ok(())
         }
 
-        fn unregister_identity(&self, profile: &Profile) -> Result<()> {
-            remove_desktop_entry(&profile.id)
+        fn unregister_identity(&self, wm_class: &str) -> Result<()> {
+            let path = desktop_file_path(&applications_dir()?, wm_class);
+            match std::fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            }
         }
     }
 }
@@ -185,48 +199,58 @@ pub use imp::Linux;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn profile(id: &str, label: &str) -> Profile {
-        Profile {
-            id: id.into(),
-            label: label.into(),
-            path: PathBuf::from("/p").join(id),
-            is_default: false,
-            last_known_account_uuid: None,
-        }
-    }
+    use crate::platform::wm_class;
 
     #[test]
-    fn the_class_is_keyed_on_the_profile_id() {
-        assert_eq!(wm_class("a1b2"), "claude-profiles-a1b2");
-    }
-
-    #[test]
-    fn labels_that_would_slug_identically_still_get_distinct_identities() {
-        let a = profile("id-one", "Work A");
-        let b = profile("id-two", "work  a");
-        assert_ne!(wm_class(&a.id), wm_class(&b.id));
+    fn profiles_that_would_slug_identically_still_get_distinct_identities() {
+        let a = wm_class("claude", "id-one");
+        let b = wm_class("claude", "id-two");
+        assert_ne!(a, b);
 
         let dir = Path::new("/apps");
-        assert_ne!(desktop_file_path(dir, &a.id), desktop_file_path(dir, &b.id));
+        assert_ne!(desktop_file_path(dir, &a), desktop_file_path(dir, &b));
+    }
+
+    #[test]
+    fn the_same_profile_id_under_two_apps_gets_two_desktop_files() {
+        let dir = Path::new("/apps");
+        assert_ne!(
+            desktop_file_path(dir, &wm_class("claude", "abc")),
+            desktop_file_path(dir, &wm_class("codex", "abc"))
+        );
     }
 
     #[test]
     fn the_desktop_entry_declares_a_matching_startup_wm_class() {
-        let p = profile("a1b2", "Kerja");
-        let entry = desktop_entry(&p, "/usr/bin/claude-desktop --class=x", "/i/icon.png");
+        let class = wm_class("claude", "a1b2");
+        let entry = desktop_entry(
+            "Claude",
+            "Kerja",
+            "/usr/bin/claude-desktop --class=x",
+            "/i/icon.png",
+            &class,
+        );
         assert!(entry.contains("Name=Claude — Kerja"));
-        assert!(entry.contains("StartupWMClass=claude-profiles-a1b2"));
+        assert!(entry.contains("StartupWMClass=agent-profiles-claude-a1b2"));
         assert!(entry.contains("NoDisplay=true"));
         assert!(entry.contains("Icon=/i/icon.png"));
         assert!(entry.starts_with("[Desktop Entry]"));
     }
 
     #[test]
+    fn the_entry_is_named_after_whichever_app_it_belongs_to() {
+        let entry = desktop_entry("ChatGPT", "Kerja", "/usr/bin/chatgpt", "icon", "c");
+        assert!(entry.contains("Name=ChatGPT — Kerja"));
+    }
+
+    #[test]
     fn the_desktop_file_lands_in_the_applications_directory() {
         assert_eq!(
-            desktop_file_path(Path::new("/home/h/.local/share/applications"), "a1b2"),
-            PathBuf::from("/home/h/.local/share/applications/claude-profiles-a1b2.desktop")
+            desktop_file_path(
+                Path::new("/home/h/.local/share/applications"),
+                "agent-profiles-claude-a1b2"
+            ),
+            PathBuf::from("/home/h/.local/share/applications/agent-profiles-claude-a1b2.desktop")
         );
     }
 
@@ -241,11 +265,11 @@ mod tests {
     fn the_config_root_honours_xdg_config_home() {
         assert_eq!(
             data_root_from(Some("/xdg"), "/home/h"),
-            PathBuf::from("/xdg/claude-profiles")
+            PathBuf::from("/xdg/agent-profiles")
         );
         assert_eq!(
             data_root_from(None, "/home/h"),
-            PathBuf::from("/home/h/.config/claude-profiles")
+            PathBuf::from("/home/h/.config/agent-profiles")
         );
     }
 }

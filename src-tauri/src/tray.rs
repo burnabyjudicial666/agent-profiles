@@ -1,18 +1,9 @@
-use crate::paths::Paths;
-use crate::platform::{find_for, Platform, RunningInstance};
-use crate::profile_store::ProfileStore;
+use crate::app_spec::AppSpec;
+use crate::platform::{find_for, wm_class, RunningProcess, ScanTarget};
+use crate::profile_store::{Profile, ProfileStore};
+use crate::runtime::AppState;
 use anyhow::{anyhow, Result};
-use std::sync::Mutex;
 use tauri::Manager;
-
-pub struct AppState {
-    pub platform: Box<dyn Platform>,
-    pub paths: Paths,
-    pub store: Mutex<ProfileStore>,
-    /// What the tray menu currently shows. Replacing an attached menu closes it
-    /// if it happens to be open, so we only replace it when it would differ.
-    pub last_menu: Mutex<Option<Vec<MenuSignature>>>,
-}
 
 pub type MenuSignature = (String, String, bool);
 
@@ -46,6 +37,29 @@ pub struct MenuRow {
     pub enabled: bool,
 }
 
+/// One app's contribution to the menu, flattened out of the locks so that
+/// building rows is a pure function of what was true at scan time.
+pub struct AppSection {
+    pub spec: &'static AppSpec,
+    pub profiles: Vec<Profile>,
+    /// Why this app cannot be used, if it cannot. An app that is simply not
+    /// installed contributes nothing to the menu rather than a row of greyed-out
+    /// noise — someone with one app installed sees exactly what they saw before
+    /// the second one existed.
+    pub unavailable: Option<String>,
+}
+
+/// A tray row id, `action:app:profile`. The app id is in the middle because the
+/// action is what the handler switches on first.
+pub fn row_id(action: &str, app_id: &str, profile_id: &str) -> String {
+    format!("{action}:{app_id}:{profile_id}")
+}
+
+pub fn parse_row_id(id: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = id.splitn(3, ':');
+    Some((parts.next()?, parts.next()?, parts.next()?))
+}
+
 pub(crate) fn combine_error_messages(
     messages: impl IntoIterator<Item = Option<String>>,
 ) -> Option<String> {
@@ -59,62 +73,100 @@ pub(crate) fn combine_error_messages(
     )
 }
 
-pub(crate) fn scan_instances(
-    result: Result<Vec<RunningInstance>>,
-) -> (Vec<RunningInstance>, Option<String>) {
+pub(crate) fn scan_processes(
+    result: Result<Vec<RunningProcess>>,
+) -> (Vec<RunningProcess>, Option<String>) {
     match result {
-        Ok(instances) => (instances, None),
+        Ok(processes) => (processes, None),
         Err(error) => (
             Vec::new(),
-            Some(format!(
-                "Could not scan running Claude Desktop instances: {error}"
-            )),
+            Some(format!("Could not scan running instances: {error}")),
         ),
     }
 }
 
 pub fn menu_rows(
-    store: &ProfileStore,
-    instances: &[RunningInstance],
-    binary_error: Option<&str>,
+    sections: &[AppSection],
+    processes: &[RunningProcess],
+    runtime_error: Option<&str>,
 ) -> Vec<MenuRow> {
-    let dupes = crate::account::duplicate_uuids(store.list());
-    let mut rows: Vec<MenuRow> = store
-        .list()
+    let available: Vec<&AppSection> = sections
         .iter()
-        .flat_map(|p| {
-            let pid = find_for(instances, &p.path, p.is_default);
+        .filter(|section| section.unavailable.is_none())
+        .collect();
+    // Headers only earn their space once there is more than one app to tell
+    // apart. With one installed the menu is exactly the flat list it always was.
+    let headed = available.len() > 1;
+    let enabled = runtime_error.is_none();
+
+    let mut rows = Vec::new();
+    for section in &available {
+        if headed {
+            rows.push(MenuRow {
+                id: format!("header:{}", section.spec.id),
+                text: section.spec.label.to_string(),
+                enabled: false,
+            });
+        }
+        let dupes = crate::account::duplicate_accounts(&section.profiles);
+        let indent = if headed { "   " } else { "" };
+        for profile in &section.profiles {
+            let pid = find_for(
+                processes,
+                section.spec.id,
+                &profile.path,
+                profile.is_default,
+            );
             let marker = if pid.is_some() { "●" } else { "○" };
-            let shared_account = p
-                .last_known_account_uuid
+            let shares_account = profile
+                .account
                 .as_deref()
-                .map(|u| dupes.contains(u))
+                .map(|account| dupes.contains(account))
                 .unwrap_or(false);
-            let suffix = if shared_account {
+            let suffix = if shares_account {
                 "  (same account)"
             } else {
                 ""
             };
-            let action = if pid.is_some() { "focus" } else { "launch" };
+            let action = if pid.is_some() && section.spec.capabilities.focus {
+                "focus"
+            } else if pid.is_some() {
+                "running"
+            } else {
+                "launch"
+            };
 
-            let mut out = vec![MenuRow {
-                id: format!("{action}:{}", p.id),
-                text: format!("{marker} {}{suffix}", p.label),
-                enabled: binary_error.is_none(),
-            }];
+            rows.push(MenuRow {
+                id: row_id(action, section.spec.id, &profile.id),
+                text: format!("{indent}{marker} {}{suffix}", profile.label),
+                enabled: enabled && action != "running",
+            });
 
             if pid.is_some() {
-                out.push(MenuRow {
-                    id: format!("quit:{}", p.id),
-                    text: format!("      Quit {}", p.label),
-                    enabled: binary_error.is_none(),
+                rows.push(MenuRow {
+                    id: row_id("quit", section.spec.id, &profile.id),
+                    text: format!("{indent}      Quit {}", profile.label),
+                    enabled,
                 });
             }
-            out
-        })
-        .collect();
+        }
+    }
 
-    if let Some(message) = binary_error {
+    // Only worth explaining when nothing at all can be launched. With one app
+    // working, the other's absence is not an error — it is simply not installed.
+    if available.is_empty() {
+        for section in sections {
+            if let Some(reason) = &section.unavailable {
+                rows.push(MenuRow {
+                    id: format!("error:{}", section.spec.id),
+                    text: reason.clone(),
+                    enabled: false,
+                });
+            }
+        }
+    }
+
+    if let Some(message) = runtime_error {
         rows.push(MenuRow {
             id: "error".into(),
             text: message.to_string(),
@@ -137,12 +189,12 @@ pub(crate) fn should_rebuild_for_event(event: &tauri::tray::TrayIconEvent) -> bo
     )
 }
 
-pub(crate) fn refresh_account_uuids(store: &mut ProfileStore) -> bool {
+pub(crate) fn refresh_accounts(store: &mut ProfileStore, spec: &AppSpec) -> bool {
     let mut changed = false;
     for profile in store.list().to_vec() {
-        let uuid = crate::account::read_account_uuid(&profile.path);
-        if profile.last_known_account_uuid != uuid {
-            store.set_account_uuid(&profile.id, uuid);
+        let account = crate::account::read_account(&profile.path, spec.identity.as_ref());
+        if profile.account != account {
+            store.set_account(&profile.id, account);
             changed = true;
         }
     }
@@ -159,28 +211,44 @@ pub(crate) fn rebuild_with_error(
 ) -> Result<()> {
     let state = app
         .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
+        .ok_or_else(|| anyhow!("Agent Profiles state is not available"))?;
 
-    let rows = {
-        let mut store = state
-            .store
-            .lock()
-            .map_err(|_| anyhow!("Claude Profiles profile store is unavailable"))?;
-
-        if refresh_account_uuids(&mut store) {
-            let _ = store.save(&state.paths);
+    let mut sections = Vec::new();
+    let mut targets: Vec<ScanTarget> = Vec::new();
+    for runtime in &state.apps {
+        let unavailable = state.availability(runtime);
+        let profiles = {
+            let mut store = runtime
+                .store
+                .lock()
+                .map_err(|_| anyhow!("the profile store for {} is unavailable", runtime.spec.id))?;
+            // Only for an app that is actually installed. Reading an identity is
+            // a write when it turns out to have changed, and a user who has the
+            // Codex CLI but not the desktop app would otherwise find a registry
+            // appearing for an app this tray cannot launch.
+            if unavailable.is_none() && refresh_accounts(&mut store, runtime.spec) {
+                let _ = store.save(&runtime.paths);
+            }
+            store.list().to_vec()
+        };
+        if unavailable.is_none() {
+            targets.push(crate::instance_manager::scan_target(
+                &*state.platform,
+                runtime.spec,
+            ));
         }
+        sections.push(AppSection {
+            spec: runtime.spec,
+            profiles,
+            unavailable,
+        });
+    }
 
-        let (instances, scan_error) = scan_instances(state.platform.running_instances());
-        let binary_error = state
-            .platform
-            .claude_binary()
-            .err()
-            .map(|error| error.to_string());
-        let menu_error =
-            combine_error_messages([runtime_error.map(str::to_string), scan_error, binary_error]);
-        menu_rows(&store, &instances, menu_error.as_deref())
-    };
+    // One sweep for every app, so the cost of the menu does not grow with the
+    // number of apps installed.
+    let (processes, scan_error) = scan_processes(state.platform.scan(&targets));
+    let menu_error = combine_error_messages([runtime_error.map(str::to_string), scan_error]);
+    let rows = menu_rows(&sections, &processes, menu_error.as_deref());
 
     // Bail out before touching AppKit at all when nothing would change. This is
     // the whole fix for the flickering menu: a rebuild triggered by a click that
@@ -190,7 +258,7 @@ pub(crate) fn rebuild_with_error(
         let mut last = state
             .last_menu
             .lock()
-            .map_err(|_| anyhow!("Claude Profiles menu state is unavailable"))?;
+            .map_err(|_| anyhow!("Agent Profiles menu state is unavailable"))?;
         let tray_exists = app.tray_by_id("main").is_some();
         if tray_exists && !should_replace_menu(last.as_deref(), &next) {
             return Ok(());
@@ -215,7 +283,7 @@ pub(crate) fn rebuild_with_error(
     menu.append(&tauri::menu::MenuItem::with_id(
         app,
         "quit_app",
-        "Quit Claude Profiles",
+        "Quit Agent Profiles",
         true,
         None::<&str>,
     )?)?;
@@ -227,7 +295,7 @@ pub(crate) fn rebuild_with_error(
         let tray = tauri::tray::TrayIconBuilder::with_id("main")
             .icon(icon)
             .menu(&menu)
-            .tooltip("Claude Profiles");
+            .tooltip("Agent Profiles");
         // Shadow rather than mutate: only macOS rebinds this, and a `mut` that no
         // other platform uses is an error under `-D warnings` on Windows and Linux.
         #[cfg(target_os = "macos")]
@@ -240,97 +308,206 @@ pub(crate) fn rebuild_with_error(
 
 /// Re-asserts every profile's desktop identity. A no-op everywhere but Linux.
 pub fn sync_identities(state: &AppState) {
-    let Ok(store) = state.store.lock() else {
-        return;
-    };
-    for p in store.list() {
-        let _ = state.platform.register_identity(p);
+    for runtime in &state.apps {
+        if !runtime.spec.capabilities.desktop_identity {
+            continue;
+        }
+        let Ok(store) = runtime.store.lock() else {
+            continue;
+        };
+        for profile in store.list() {
+            let _ = state.platform.register_identity(
+                runtime.spec,
+                &profile.label,
+                &wm_class(runtime.spec.id, &profile.id),
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_spec;
     use crate::paths::Paths;
-    use crate::platform::RunningInstance;
-    use crate::profile_store::ProfileStore;
+    use std::path::PathBuf;
 
-    fn store_with_one_extra() -> (tempfile::TempDir, ProfileStore) {
-        let d = tempfile::tempdir().unwrap();
-        let paths = Paths::new(d.path().join("root"));
-        let def = d.path().join("stock");
-        std::fs::create_dir_all(&def).unwrap();
-        let mut store = ProfileStore::load(&paths, &def).unwrap();
-        store.add("Kerja", &paths).unwrap();
-        (d, store)
+    fn profiles(labels: &[&str]) -> Vec<Profile> {
+        std::iter::once(Profile {
+            id: "default".into(),
+            label: "Default".into(),
+            path: PathBuf::from("/stock"),
+            is_default: true,
+            account: None,
+        })
+        .chain(labels.iter().enumerate().map(|(i, label)| Profile {
+            id: format!("id{i}"),
+            label: (*label).into(),
+            path: PathBuf::from("/p").join(format!("id{i}")),
+            is_default: false,
+            account: None,
+        }))
+        .collect()
+    }
+
+    fn section(spec: &'static AppSpec, profiles: Vec<Profile>) -> AppSection {
+        AppSection {
+            spec,
+            profiles,
+            unavailable: None,
+        }
+    }
+
+    fn missing(spec: &'static AppSpec) -> AppSection {
+        AppSection {
+            spec,
+            profiles: profiles(&[]),
+            unavailable: Some(format!("{} was not found", spec.product)),
+        }
+    }
+
+    fn running(app_id: &'static str, dir: &str) -> RunningProcess {
+        RunningProcess {
+            app_id,
+            pid: 777,
+            profile_dir: Some(PathBuf::from(dir)),
+        }
     }
 
     #[test]
     fn a_running_profile_gets_a_filled_marker_and_a_focus_action() {
-        let (_d, store) = store_with_one_extra();
-        let kerja = store.list()[1].clone();
-        let instances = vec![RunningInstance {
-            pid: 777,
-            user_data_dir: Some(kerja.path.clone()),
-        }];
-        let rows = menu_rows(&store, &instances, None);
-        let row = rows
-            .iter()
-            .find(|r| r.id == format!("focus:{}", kerja.id))
-            .unwrap();
-        assert!(row.text.starts_with("● "));
+        let sections = vec![section(&app_spec::CLAUDE, profiles(&["Kerja"]))];
+        let rows = menu_rows(&sections, &[running("claude", "/p/id0")], None);
+        let row = rows.iter().find(|r| r.id == "focus:claude:id0").unwrap();
+        assert!(row.text.contains('●'));
         assert!(row.enabled);
     }
 
     #[test]
     fn a_running_profile_also_offers_a_quit_row_right_after_it() {
-        let (_d, store) = store_with_one_extra();
-        let kerja = store.list()[1].clone();
-        let instances = vec![RunningInstance {
-            pid: 777,
-            user_data_dir: Some(kerja.path.clone()),
-        }];
-        let rows = menu_rows(&store, &instances, None);
-
-        let focus_at = rows
+        let sections = vec![section(&app_spec::CLAUDE, profiles(&["Kerja"]))];
+        let rows = menu_rows(&sections, &[running("claude", "/p/id0")], None);
+        let at = rows
             .iter()
-            .position(|r| r.id == format!("focus:{}", kerja.id))
+            .position(|r| r.id == "focus:claude:id0")
             .unwrap();
-        let quit = &rows[focus_at + 1];
-        assert_eq!(quit.id, format!("quit:{}", kerja.id));
-        assert!(quit.text.contains("Quit"));
+        assert_eq!(rows[at + 1].id, "quit:claude:id0");
+        assert!(rows[at + 1].text.contains("Quit"));
     }
 
     #[test]
     fn a_stopped_profile_offers_launch_and_no_quit_row() {
-        let (_d, store) = store_with_one_extra();
-        let kerja = store.list()[1].clone();
-        let rows = menu_rows(&store, &[], None);
-        let row = rows
-            .iter()
-            .find(|r| r.id == format!("launch:{}", kerja.id))
-            .unwrap();
-        assert!(row.text.starts_with("○ "));
+        let sections = vec![section(&app_spec::CLAUDE, profiles(&["Kerja"]))];
+        let rows = menu_rows(&sections, &[], None);
+        let row = rows.iter().find(|r| r.id == "launch:claude:id0").unwrap();
+        assert!(row.text.contains('○'));
         assert!(!rows.iter().any(|r| r.id.starts_with("quit:")));
     }
 
     #[test]
-    fn a_missing_binary_disables_every_row_and_adds_an_explanation() {
-        let (_d, store) = store_with_one_extra();
-        let rows = menu_rows(&store, &[], Some("Claude Desktop was not found at /x"));
-        assert!(rows.iter().filter(|r| r.id != "error").all(|r| !r.enabled));
-        assert!(rows.iter().any(|r| r.text.contains("not found at /x")));
+    fn with_one_app_installed_the_menu_has_no_headers_at_all() {
+        // Zero regression for someone who only has Claude: the menu they see is
+        // the flat list it was before a second app existed.
+        let sections = vec![
+            section(&app_spec::CLAUDE, profiles(&["Kerja"])),
+            missing(&app_spec::CODEX),
+        ];
+        let rows = menu_rows(&sections, &[], None);
+        assert!(rows.iter().all(|r| !r.id.starts_with("header:")));
+        assert!(rows.iter().all(|r| !r.text.starts_with(' ')));
     }
 
     #[test]
-    fn profiles_sharing_an_account_are_marked() {
-        let (d, mut store) = store_with_one_extra();
-        let _ = d;
-        let a = store.list()[0].id.clone();
-        let b = store.list()[1].id.clone();
-        store.set_account_uuid(&a, Some("same".into()));
-        store.set_account_uuid(&b, Some("same".into()));
-        let rows = menu_rows(&store, &[], None);
+    fn an_app_that_is_not_installed_contributes_no_rows() {
+        let sections = vec![
+            section(&app_spec::CLAUDE, profiles(&["Kerja"])),
+            missing(&app_spec::CODEX),
+        ];
+        let rows = menu_rows(&sections, &[], None);
+        assert!(rows.iter().all(|r| !r.id.contains(":codex:")));
+        // ...and its absence is not reported as an error either.
+        assert!(rows.iter().all(|r| !r.id.starts_with("error")));
+    }
+
+    #[test]
+    fn with_two_apps_installed_each_gets_a_header_and_indented_rows() {
+        let sections = vec![
+            section(&app_spec::CLAUDE, profiles(&["Kerja"])),
+            section(&app_spec::CODEX, profiles(&["Pribadi"])),
+        ];
+        let rows = menu_rows(&sections, &[], None);
+        assert_eq!(rows[0].id, "header:claude");
+        assert_eq!(rows[0].text, "Claude");
+        assert!(!rows[0].enabled, "a header is a label, not an action");
+        assert!(rows.iter().any(|r| r.id == "header:codex"));
+        assert!(rows
+            .iter()
+            .find(|r| r.id == "launch:claude:id0")
+            .unwrap()
+            .text
+            .starts_with("   "));
+    }
+
+    #[test]
+    fn the_same_profile_id_under_two_apps_produces_two_distinct_rows() {
+        // Profile ids are uuids per app, but nothing stops them colliding, and a
+        // collision must not make one row shadow the other.
+        let sections = vec![
+            section(&app_spec::CLAUDE, profiles(&["A"])),
+            section(&app_spec::CODEX, profiles(&["B"])),
+        ];
+        let rows = menu_rows(&sections, &[], None);
+        assert!(rows.iter().any(|r| r.id == "launch:claude:id0"));
+        assert!(rows.iter().any(|r| r.id == "launch:codex:id0"));
+    }
+
+    #[test]
+    fn a_process_belonging_to_one_app_never_lights_up_the_other() {
+        let sections = vec![
+            section(&app_spec::CLAUDE, profiles(&["A"])),
+            section(&app_spec::CODEX, profiles(&["B"])),
+        ];
+        // Same directory, but owned by Claude.
+        let rows = menu_rows(&sections, &[running("claude", "/p/id0")], None);
+        assert!(rows.iter().any(|r| r.id == "focus:claude:id0"));
+        assert!(rows.iter().any(|r| r.id == "launch:codex:id0"));
+    }
+
+    #[test]
+    fn when_nothing_is_installed_every_reason_is_shown() {
+        let sections = vec![missing(&app_spec::CLAUDE), missing(&app_spec::CODEX)];
+        let rows = menu_rows(&sections, &[], None);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| !r.enabled));
+        assert!(rows.iter().any(|r| r.text.contains("Claude Desktop")));
+        assert!(rows.iter().any(|r| r.text.contains("ChatGPT")));
+    }
+
+    #[test]
+    fn a_runtime_error_disables_every_row_and_adds_an_explanation() {
+        let sections = vec![section(&app_spec::CLAUDE, profiles(&["Kerja"]))];
+        let rows = menu_rows(&sections, &[], Some("process list unavailable"));
+        assert!(rows.iter().filter(|r| r.id != "error").all(|r| !r.enabled));
+        assert!(rows
+            .iter()
+            .any(|r| r.text.contains("process list unavailable")));
+    }
+
+    #[test]
+    fn profiles_sharing_an_account_are_marked_within_their_own_app() {
+        let mut claude = profiles(&["A", "B"]);
+        claude[1].account = Some("same".into());
+        claude[2].account = Some("same".into());
+        // An identical string under the other app must NOT be treated as a clash:
+        // a Claude uuid and a ChatGPT account id share no namespace.
+        let mut codex = profiles(&["C"]);
+        codex[1].account = Some("same".into());
+
+        let sections = vec![
+            section(&app_spec::CLAUDE, claude),
+            section(&app_spec::CODEX, codex),
+        ];
+        let rows = menu_rows(&sections, &[], None);
         assert_eq!(
             rows.iter()
                 .filter(|r| r.text.contains("same account"))
@@ -340,12 +517,32 @@ mod tests {
     }
 
     #[test]
-    fn a_liveness_scan_failure_keeps_the_empty_fallback_and_exposes_its_reason() {
-        let (instances, reason) = scan_instances(Err(anyhow::anyhow!("process list unavailable")));
-        assert!(instances.is_empty());
+    fn a_row_id_survives_a_round_trip() {
+        let id = row_id("launch", "claude", "abc-123");
+        assert_eq!(parse_row_id(&id), Some(("launch", "claude", "abc-123")));
+    }
+
+    #[test]
+    fn a_profile_id_containing_a_colon_still_parses_whole() {
+        // Ids are uuids today, but the parser splitting on the first two colons
+        // only is what keeps that an implementation detail rather than a rule.
+        let id = row_id("launch", "claude", "weird:id");
+        assert_eq!(parse_row_id(&id), Some(("launch", "claude", "weird:id")));
+    }
+
+    #[test]
+    fn a_row_that_is_not_an_action_does_not_parse_as_one() {
+        assert_eq!(parse_row_id("manage"), None);
+        assert_eq!(parse_row_id("quit_app"), None);
+    }
+
+    #[test]
+    fn a_scan_failure_keeps_the_empty_fallback_and_exposes_its_reason() {
+        let (processes, reason) = scan_processes(Err(anyhow!("process list unavailable")));
+        assert!(processes.is_empty());
         assert_eq!(
             reason.as_deref(),
-            Some("Could not scan running Claude Desktop instances: process list unavailable")
+            Some("Could not scan running instances: process list unavailable")
         );
     }
 
@@ -399,39 +596,42 @@ mod tests {
 
     #[test]
     fn an_unchanged_menu_is_never_replaced() {
-        let (_d, store) = store_with_one_extra();
-        let rows = menu_rows(&store, &[], None);
-        let first = signature(&rows);
-
-        // The very first build has nothing to compare against, so it must happen.
+        let sections = vec![section(&app_spec::CLAUDE, profiles(&["Kerja"]))];
+        let first = signature(&menu_rows(&sections, &[], None));
         assert!(should_replace_menu(None, &first));
 
-        // A second pass over identical state must not touch the menu: replacing an
-        // attached menu on macOS closes it, which is what made it flicker.
-        let same = signature(&menu_rows(&store, &[], None));
+        let same = signature(&menu_rows(&sections, &[], None));
         assert!(!should_replace_menu(Some(&first), &same));
     }
 
     #[test]
     fn a_profile_going_live_does_replace_the_menu() {
-        let (_d, store) = store_with_one_extra();
-        let kerja = store.list()[1].clone();
-        let stopped = signature(&menu_rows(&store, &[], None));
-
-        let running = signature(&menu_rows(
-            &store,
-            &[RunningInstance {
-                pid: 777,
-                user_data_dir: Some(kerja.path.clone()),
-            }],
-            None,
-        ));
-
-        assert!(should_replace_menu(Some(&stopped), &running));
+        let sections = vec![section(&app_spec::CLAUDE, profiles(&["Kerja"]))];
+        let stopped = signature(&menu_rows(&sections, &[], None));
+        let live = signature(&menu_rows(&sections, &[running("claude", "/p/id0")], None));
+        assert!(should_replace_menu(Some(&stopped), &live));
     }
 
     #[test]
-    fn refreshing_account_uuids_reports_only_actual_changes() {
+    fn a_second_app_appearing_replaces_the_menu() {
+        // Installing ChatGPT while this app runs must be picked up on the next
+        // hover, not on the next restart.
+        let one = vec![
+            section(&app_spec::CLAUDE, profiles(&["Kerja"])),
+            missing(&app_spec::CODEX),
+        ];
+        let two = vec![
+            section(&app_spec::CLAUDE, profiles(&["Kerja"])),
+            section(&app_spec::CODEX, profiles(&[])),
+        ];
+        assert!(should_replace_menu(
+            Some(&signature(&menu_rows(&one, &[], None))),
+            &signature(&menu_rows(&two, &[], None))
+        ));
+    }
+
+    #[test]
+    fn refreshing_accounts_reports_only_actual_changes() {
         let d = tempfile::tempdir().unwrap();
         let paths = Paths::new(d.path().join("root"));
         let def = d.path().join("stock");
@@ -439,7 +639,7 @@ mod tests {
         let mut store = ProfileStore::load(&paths, &def).unwrap();
         store.add("Kerja", &paths).unwrap();
 
-        assert!(!refresh_account_uuids(&mut store));
+        assert!(!refresh_accounts(&mut store, &app_spec::CLAUDE));
 
         let profile = store.list()[1].clone();
         std::fs::write(
@@ -447,16 +647,33 @@ mod tests {
             r#"{"lastKnownAccountUuid":"abc-123"}"#,
         )
         .unwrap();
-        assert!(refresh_account_uuids(&mut store));
+        assert!(refresh_accounts(&mut store, &app_spec::CLAUDE));
         assert_eq!(
-            store
-                .get(&profile.id)
-                .unwrap()
-                .last_known_account_uuid
-                .as_deref(),
+            store.get(&profile.id).unwrap().account.as_deref(),
             Some("abc-123")
         );
-        assert!(!refresh_account_uuids(&mut store));
+        assert!(!refresh_accounts(&mut store, &app_spec::CLAUDE));
+    }
+
+    #[test]
+    fn each_app_reads_its_own_identity_file() {
+        // The same directory holds a Codex account id; read through Claude's spec
+        // it must stay invisible rather than being mistaken for an account.
+        let d = tempfile::tempdir().unwrap();
+        let paths = Paths::new(d.path().join("root"));
+        let def = d.path().join("stock");
+        std::fs::create_dir_all(&def).unwrap();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let p = store.add("Kerja", &paths).unwrap();
+        std::fs::write(
+            p.path.join("auth.json"),
+            r#"{"tokens":{"account_id":"acct-9"}}"#,
+        )
+        .unwrap();
+
+        assert!(!refresh_accounts(&mut store, &app_spec::CLAUDE));
+        assert!(refresh_accounts(&mut store, &app_spec::CODEX));
+        assert_eq!(store.get(&p.id).unwrap().account.as_deref(), Some("acct-9"));
     }
 
     #[test]

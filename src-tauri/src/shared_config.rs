@@ -1,6 +1,6 @@
 use crate::platform::Platform;
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, PartialEq)]
 pub enum LinkState {
@@ -9,7 +9,7 @@ pub enum LinkState {
     CreateFresh,
 }
 
-pub fn inspect(link: &Path, _shared: &Path, is_linked: bool) -> Result<LinkState> {
+pub fn inspect(link: &Path, is_linked: bool) -> Result<LinkState> {
     if is_linked {
         return Ok(LinkState::AlreadyLinked);
     }
@@ -19,13 +19,37 @@ pub fn inspect(link: &Path, _shared: &Path, is_linked: bool) -> Result<LinkState
     }
 }
 
-pub fn ensure_shared(platform: &dyn Platform, profile_dir: &Path, shared: &Path) -> Result<()> {
-    let link = profile_dir.join(crate::paths::CONFIG_FILENAME);
+/// Where a profile's own copy is moved aside to when a shared config already
+/// exists. Appends rather than replacing the extension, so `config.toml` becomes
+/// `config.toml.replaced` and not `config.replaced`.
+pub fn displaced_path(link: &Path) -> PathBuf {
+    let mut name = link.file_name().unwrap_or_default().to_os_string();
+    name.push(".replaced");
+    link.with_file_name(name)
+}
+
+/// The seed written when there is nothing to adopt. An app that shares a JSON
+/// file needs a valid empty object; one sharing TOML is happy with an empty file.
+fn empty_document(filename: &str) -> &'static str {
+    if filename.ends_with(".json") {
+        "{}"
+    } else {
+        ""
+    }
+}
+
+pub fn ensure_shared(
+    platform: &dyn Platform,
+    profile_dir: &Path,
+    shared: &Path,
+    filename: &str,
+) -> Result<()> {
+    let link = profile_dir.join(filename);
     let is_linked = is_same_file(&link, shared);
 
-    match inspect(&link, shared, is_linked)? {
+    match inspect(&link, is_linked)? {
         LinkState::AlreadyLinked => {
-            write_shared_if_absent(shared)?;
+            write_shared_if_absent(shared, filename)?;
             return Ok(());
         }
         LinkState::AdoptFile(contents) => {
@@ -33,28 +57,27 @@ pub fn ensure_shared(platform: &dyn Platform, profile_dir: &Path, shared: &Path)
             // Adopt ONLY into an empty slot. Once a shared config exists it is the
             // single source of truth for every profile, and a newly-added profile
             // carrying its own file must not overwrite it — that would silently
-            // destroy the MCP servers every other profile is already using. The
+            // destroy the servers every other profile is already using. The
             // displaced file is kept beside the profile so nothing is lost.
             if shared.exists() {
-                let displaced = link.with_extension("json.replaced");
-                std::fs::rename(&link, &displaced)?;
+                std::fs::rename(&link, displaced_path(&link))?;
             } else {
                 std::fs::write(shared, contents)?;
             }
         }
-        LinkState::CreateFresh => write_shared_if_absent(shared)?,
+        LinkState::CreateFresh => write_shared_if_absent(shared, filename)?,
     }
 
     if std::fs::symlink_metadata(&link).is_ok() {
         std::fs::remove_file(&link)?;
     }
-    platform.link_shared_config(profile_dir, shared)
+    platform.link(shared, &link)
 }
 
-fn write_shared_if_absent(shared: &Path) -> Result<()> {
+fn write_shared_if_absent(shared: &Path, filename: &str) -> Result<()> {
     create_parent(shared)?;
     if !shared.exists() {
-        std::fs::write(shared, "{}")?;
+        std::fs::write(shared, empty_document(filename))?;
     }
     Ok(())
 }
@@ -113,6 +136,9 @@ mod tests {
     use super::*;
     use crate::shared_config::tests_support::FakePlatform;
 
+    const JSON: &str = "claude_desktop_config.json";
+    const TOML: &str = "config.toml";
+
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
     }
@@ -122,11 +148,7 @@ mod tests {
         let d = tmp();
         let link = d.path().join("cfg.json");
         std::fs::write(&link, "{}").unwrap();
-        let shared = d.path().join("shared.json");
-        assert_eq!(
-            inspect(&link, &shared, true).unwrap(),
-            LinkState::AlreadyLinked
-        );
+        assert_eq!(inspect(&link, true).unwrap(), LinkState::AlreadyLinked);
     }
 
     #[test]
@@ -134,9 +156,8 @@ mod tests {
         let d = tmp();
         let link = d.path().join("cfg.json");
         std::fs::write(&link, r#"{"mcpServers":{"a":{}}}"#).unwrap();
-        let shared = d.path().join("shared.json");
         assert_eq!(
-            inspect(&link, &shared, false).unwrap(),
+            inspect(&link, false).unwrap(),
             LinkState::AdoptFile(r#"{"mcpServers":{"a":{}}}"#.to_string())
         );
     }
@@ -144,24 +165,59 @@ mod tests {
     #[test]
     fn a_missing_config_means_create_fresh() {
         let d = tmp();
-        let link = d.path().join("nothing.json");
-        let shared = d.path().join("shared.json");
         assert_eq!(
-            inspect(&link, &shared, false).unwrap(),
+            inspect(&d.path().join("nothing.json"), false).unwrap(),
             LinkState::CreateFresh
         );
     }
 
     #[test]
-    fn ensure_shared_seeds_an_empty_object_when_there_is_nothing_to_adopt() {
+    fn a_displaced_file_keeps_its_whole_name() {
+        // `with_extension` would turn config.toml into config.replaced, quietly
+        // changing which file the user has to go looking for.
+        assert_eq!(
+            displaced_path(Path::new("/p/config.toml")),
+            PathBuf::from("/p/config.toml.replaced")
+        );
+        assert_eq!(
+            displaced_path(Path::new("/p/claude_desktop_config.json")),
+            PathBuf::from("/p/claude_desktop_config.json.replaced")
+        );
+    }
+
+    #[test]
+    fn a_json_seed_is_a_valid_empty_document_and_a_toml_seed_is_empty() {
+        // `{}` in a TOML file is a syntax error, and an empty JSON file is not
+        // parseable — the seed has to match the format the app expects.
+        assert_eq!(empty_document(JSON), "{}");
+        assert_eq!(empty_document(TOML), "");
+    }
+
+    #[test]
+    fn ensure_shared_seeds_an_empty_document_when_there_is_nothing_to_adopt() {
         let d = tmp();
         let profile = d.path().join("profile");
         std::fs::create_dir_all(&profile).unwrap();
-        let shared = d.path().join("shared").join(crate::paths::CONFIG_FILENAME);
+        let shared = d.path().join("shared").join(JSON);
 
-        ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
+        ensure_shared(&FakePlatform::default(), &profile, &shared, JSON).unwrap();
 
         assert_eq!(std::fs::read_to_string(&shared).unwrap().trim(), "{}");
+    }
+
+    #[test]
+    fn ensure_shared_works_for_an_app_that_shares_toml() {
+        let d = tmp();
+        let profile = d.path().join("profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join(TOML), "model = \"gpt-5.6\"\n").unwrap();
+        let shared = d.path().join("shared").join(TOML);
+
+        ensure_shared(&FakePlatform::default(), &profile, &shared, TOML).unwrap();
+
+        assert!(std::fs::read_to_string(&shared)
+            .unwrap()
+            .contains("gpt-5.6"));
     }
 
     #[test]
@@ -169,14 +225,10 @@ mod tests {
         let d = tmp();
         let profile = d.path().join("profile");
         std::fs::create_dir_all(&profile).unwrap();
-        std::fs::write(
-            profile.join(crate::paths::CONFIG_FILENAME),
-            r#"{"mcpServers":{"keep":{}}}"#,
-        )
-        .unwrap();
-        let shared = d.path().join("shared").join(crate::paths::CONFIG_FILENAME);
+        std::fs::write(profile.join(JSON), r#"{"mcpServers":{"keep":{}}}"#).unwrap();
+        let shared = d.path().join("shared").join(JSON);
 
-        ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
+        ensure_shared(&FakePlatform::default(), &profile, &shared, JSON).unwrap();
 
         assert!(std::fs::read_to_string(&shared).unwrap().contains("keep"));
     }
@@ -186,20 +238,20 @@ mod tests {
         let d = tmp();
         let profile = d.path().join("profile");
         std::fs::create_dir_all(&profile).unwrap();
-        let link = profile.join(crate::paths::CONFIG_FILENAME);
+        let link = profile.join(JSON);
         let profile_contents = r#"{"mcpServers":{"profile":{}}}"#;
         std::fs::write(&link, profile_contents).unwrap();
 
-        let shared = d.path().join("shared").join(crate::paths::CONFIG_FILENAME);
+        let shared = d.path().join("shared").join(JSON);
         std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
         let shared_contents = r#"{"mcpServers":{"shared":{}}}"#;
         std::fs::write(&shared, shared_contents).unwrap();
 
-        ensure_shared(&FakePlatform::default(), &profile, &shared).unwrap();
+        ensure_shared(&FakePlatform::default(), &profile, &shared, JSON).unwrap();
 
         assert_eq!(std::fs::read_to_string(&shared).unwrap(), shared_contents);
         assert_eq!(
-            std::fs::read_to_string(link.with_extension("json.replaced")).unwrap(),
+            std::fs::read_to_string(displaced_path(&link)).unwrap(),
             profile_contents
         );
     }
@@ -207,19 +259,20 @@ mod tests {
 
 #[cfg(test)]
 pub mod tests_support {
-    use crate::platform::{FocusOutcome, Platform, RunningInstance};
+    use crate::app_spec::Locations;
+    use crate::platform::{FocusHint, FocusOutcome, Platform, RunningProcess, ScanTarget};
     use std::path::{Path, PathBuf};
 
     /// Minimal Platform stand-in: real linking is a per-backend concern, so this
     /// one just copies. `running` lets a test stage a live instance.
     #[derive(Default)]
     pub struct FakePlatform {
-        running: Vec<RunningInstance>,
+        running: Vec<RunningProcess>,
         scan_fails: bool,
     }
 
     impl FakePlatform {
-        pub fn with_running(running: Vec<RunningInstance>) -> Self {
+        pub fn with_running(running: Vec<RunningProcess>) -> Self {
             Self {
                 running,
                 scan_fails: false,
@@ -235,27 +288,33 @@ pub mod tests_support {
     }
 
     impl Platform for FakePlatform {
+        fn declared_here(&self, _locations: &Locations) -> bool {
+            true
+        }
         fn data_root(&self) -> anyhow::Result<PathBuf> {
             unimplemented!()
         }
-        fn default_profile_dir(&self) -> anyhow::Result<PathBuf> {
+        fn default_profile_dir(&self, _locations: &Locations) -> anyhow::Result<PathBuf> {
             unimplemented!()
         }
-        fn claude_binary(&self) -> anyhow::Result<PathBuf> {
-            Ok(PathBuf::from("/fake/claude"))
+        fn binary(&self, _locations: &Locations, _product: &str) -> anyhow::Result<PathBuf> {
+            Ok(PathBuf::from("/fake/app"))
         }
-        fn running_instances(&self) -> anyhow::Result<Vec<RunningInstance>> {
+        fn process_marker(&self, _locations: &Locations) -> String {
+            "/fake/app".into()
+        }
+        fn scan(&self, _targets: &[ScanTarget]) -> anyhow::Result<Vec<RunningProcess>> {
             if self.scan_fails {
                 anyhow::bail!("fake process scan failed")
             }
             Ok(self.running.clone())
         }
-        fn link_shared_config(&self, profile_dir: &Path, shared: &Path) -> anyhow::Result<()> {
-            std::fs::copy(shared, profile_dir.join(crate::paths::CONFIG_FILENAME))?;
+        fn link(&self, source: &Path, target: &Path) -> anyhow::Result<()> {
+            std::fs::copy(source, target)?;
             Ok(())
         }
-        fn focus(&self, _pid: i32, _profile_id: &str) -> anyhow::Result<FocusOutcome> {
-            unimplemented!()
+        fn focus(&self, _pid: i32, _hint: &FocusHint) -> anyhow::Result<FocusOutcome> {
+            Ok(FocusOutcome::Focused)
         }
         fn quit(&self, _pid: i32) -> anyhow::Result<()> {
             unimplemented!()

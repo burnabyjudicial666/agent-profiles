@@ -9,8 +9,10 @@ pub struct Profile {
     pub label: String,
     pub path: PathBuf,
     pub is_default: bool,
+    /// The account this profile is signed into, as reported by whichever field
+    /// the app records it in. `None` means unknown, never "no account".
     #[serde(default)]
-    pub last_known_account_uuid: Option<String>,
+    pub account: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -44,7 +46,7 @@ impl ProfileStore {
                     label: "Default".into(),
                     path: default_dir.to_path_buf(),
                     is_default: true,
-                    last_known_account_uuid: None,
+                    account: None,
                 },
             );
         }
@@ -68,16 +70,47 @@ impl ProfileStore {
         self.profiles.iter().find(|p| p.id == id)
     }
 
+    /// Eight hex characters rather than a whole uuid.
+    ///
+    /// A profile id is a directory name, and its length is charged against the
+    /// socket budget documented in `paths`: a uuid spends 36 bytes of it, which
+    /// was enough on its own to push a real installation past the limit. Eight
+    /// characters collide about once in four billion draws, and the loop makes
+    /// even that a non-event — an id only has to be unique within this store.
+    fn fresh_id(&self) -> String {
+        loop {
+            let candidate: String = uuid::Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(8)
+                .collect();
+            if !self.profiles.iter().any(|p| p.id == candidate) {
+                return candidate;
+            }
+        }
+    }
+
     pub fn add(&mut self, label: &str, paths: &Paths) -> Result<Profile> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = self.fresh_id();
         let path = paths.profile_dir(&id);
+        if !crate::paths::leaves_room_for_socket(&path) {
+            return Err(anyhow!(
+                "this profile's path would be {} characters, leaving no room for the \
+                 socket applications create inside a profile (the system limit is {}). \
+                 Applications launched from it would fail to start or silently lose \
+                 features, so it is not created.",
+                path.display().to_string().len(),
+                crate::paths::SOCKET_PATH_LIMIT
+            ));
+        }
         std::fs::create_dir_all(&path)?;
         let profile = Profile {
             id,
             label: label.to_string(),
             path,
             is_default: false,
-            last_known_account_uuid: None,
+            account: None,
         };
         self.profiles.push(profile.clone());
         Ok(profile)
@@ -109,9 +142,9 @@ impl ProfileStore {
         Ok(())
     }
 
-    pub fn set_account_uuid(&mut self, id: &str, uuid: Option<String>) {
+    pub fn set_account(&mut self, id: &str, account: Option<String>) {
         if let Some(p) = self.profiles.iter_mut().find(|p| p.id == id) {
-            p.last_known_account_uuid = uuid;
+            p.account = account;
         }
     }
 }
@@ -196,6 +229,36 @@ mod tests {
         let reloaded = ProfileStore::load(&paths, &def).unwrap();
         assert_eq!(reloaded.list().len(), 2);
         assert_eq!(reloaded.get(&created.id).unwrap().label, "Kerja");
+    }
+
+    #[test]
+    fn a_new_id_is_short_and_unique() {
+        let (_d, paths, def) = fixture();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let created = store.add("x", &paths).unwrap();
+            assert_eq!(created.id.len(), 8, "a uuid would eat the socket budget");
+            assert!(
+                created.id.chars().all(|c| c.is_ascii_hexdigit()),
+                "an id is a directory name: {}",
+                created.id
+            );
+            assert!(seen.insert(created.id.clone()), "ids must not repeat");
+            // Labels are validated at the command layer, not here, so reusing
+            // one is fine and keeps this focused on the id.
+            store
+                .rename(&created.id, &format!("x{}", created.id))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn an_id_never_collides_with_the_stock_profile() {
+        let (_d, paths, def) = fixture();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let created = store.add("Kerja", &paths).unwrap();
+        assert_ne!(created.id, "default");
     }
 
     #[test]

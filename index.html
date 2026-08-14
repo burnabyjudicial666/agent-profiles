@@ -4,17 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f4f0e8" />
-    <title>Claude Profiles</title>
+    <title>Agent Profiles</title>
     <link rel="icon" type="image/png" href="/src/favicon.png" />
   </head>
   <body>
     <main class="container">
       <header class="page-header">
-        <div class="brand-mark" aria-hidden="true"><span>cp</span></div>
+        <div class="brand-mark" aria-hidden="true"><span>ap</span></div>
         <div>
           <p class="eyebrow">Profile cabinet</p>
-          <h1>Claude Profiles</h1>
-          <p class="lede">Keep each Claude Desktop workspace separate and ready to open.</p>
+          <h1>Agent Profiles</h1>
+          <p class="lede">Keep each coding agent workspace separate and ready to open.</p>
         </div>
       </header>
 
@@ -27,16 +27,20 @@
           <span id="profile-count" class="count-badge" aria-live="polite">0</span>
         </div>
         <div id="error" class="error" role="alert" hidden></div>
-        <ul id="profiles" class="profile-list" aria-live="polite"></ul>
+        <div id="apps" aria-live="polite"></div>
       </section>
 
       <section class="add-section" aria-labelledby="add-heading">
         <div>
           <p class="eyebrow">Make room for another sign-in</p>
           <h2 id="add-heading">Add a profile</h2>
-          <p class="helper">Choose a label you will recognize. Account details stay inside Claude Desktop.</p>
+          <p class="helper">Choose a label you will recognize. Account details stay inside the app itself.</p>
         </div>
         <form id="add-profile-form" class="add-form">
+          <span class="app-picker" hidden>
+            <label class="sr-only" for="new-app">App</label>
+            <select id="new-app" name="app"></select>
+          </span>
           <label class="sr-only" for="new-label">Profile label</label>
           <input id="new-label" name="label" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Work" required />
           <button type="submit" class="button button-primary">Add profile</button>
@@ -46,11 +50,11 @@
         <div>
           <p class="eyebrow">Startup</p>
           <h2 id="settings-heading">Launch at login</h2>
-          <p class="helper">Start Claude Profiles automatically when you sign in. This only starts the tray; no profile is opened for you.</p>
+          <p class="helper">Start Agent Profiles automatically when you sign in. This only starts the tray; no profile is opened for you.</p>
         </div>
         <label class="toggle-row">
           <input id="autostart" type="checkbox" />
-          <span>Start Claude Profiles at login</span>
+          <span>Start Agent Profiles at login</span>
         </label>
       </section>
     </main>

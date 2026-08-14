@@ -1,41 +1,57 @@
-use crate::platform::{find_for, Platform};
+use crate::app_spec::AppSpec;
+use crate::platform::{find_for, wm_class, Platform};
 use crate::profile_store::{Profile, ProfileStore};
-use crate::tray::AppState;
+use crate::runtime::{AppRuntime, AppState};
 use serde::Serialize;
 use std::path::Path;
 
 #[derive(Serialize, Clone)]
 pub struct ProfileView {
     pub id: String,
+    pub app_id: String,
     pub label: String,
     pub path: String,
     pub is_default: bool,
     pub shares_account: bool,
 }
 
-pub fn to_views(store: &ProfileStore) -> Vec<ProfileView> {
-    let dupes = crate::account::duplicate_uuids(store.list());
+#[derive(Serialize, Clone)]
+pub struct AppView {
+    pub id: String,
+    pub label: String,
+    /// `None` when the app is installed; otherwise why it is not usable.
+    pub unavailable: Option<String>,
+    pub profiles: Vec<ProfileView>,
+}
+
+pub fn to_views(spec: &AppSpec, store: &ProfileStore) -> Vec<ProfileView> {
+    let dupes = crate::account::duplicate_accounts(store.list());
     store
         .list()
         .iter()
         .map(|p| ProfileView {
             id: p.id.clone(),
+            app_id: spec.id.to_string(),
             label: p.label.clone(),
             path: p.path.display().to_string(),
             is_default: p.is_default,
             shares_account: p
-                .last_known_account_uuid
+                .account
                 .as_deref()
-                .map(|u| dupes.contains(u))
+                .map(|account| dupes.contains(account))
                 .unwrap_or(false),
         })
         .collect()
 }
 
-pub(crate) fn refuse_if_running(platform: &dyn Platform, profile: &Profile) -> anyhow::Result<()> {
-    let instances = platform.running_instances()?;
-    if find_for(&instances, &profile.path, profile.is_default).is_some() {
-        anyhow::bail!("quit this profile's Claude Desktop before deleting it");
+pub(crate) fn refuse_if_running(
+    platform: &dyn Platform,
+    spec: &'static AppSpec,
+    profile: &Profile,
+) -> anyhow::Result<()> {
+    let processes = platform.scan(&[crate::instance_manager::scan_target(platform, spec)])?;
+    if find_for(&processes, spec.id, &profile.path, profile.is_default).is_some() {
+        anyhow::bail!("quit this profile's {} before deleting it", spec.product);
     }
     Ok(())
 }
@@ -65,6 +81,9 @@ pub(crate) fn directory_size(path: &Path) -> anyhow::Result<u64> {
 /// API boundary. A blank label renders as a nameless tray row, and a duplicate one
 /// renders as two identical rows for two different accounts — both leave the user
 /// unable to tell which profile they are about to launch.
+///
+/// Scoped to one app: "Kerja" under Claude and "Kerja" under ChatGPT sit under
+/// different headers and are never two rows a user has to tell apart.
 pub(crate) fn validate_label(
     store: &ProfileStore,
     label: &str,
@@ -84,31 +103,53 @@ pub(crate) fn validate_label(
     Ok(label.to_string())
 }
 
-fn register_renamed_identity(platform: &dyn Platform, renamed: &Profile) {
-    let _ = platform.register_identity(renamed);
+fn register_identity(platform: &dyn Platform, runtime: &AppRuntime, profile: &Profile) {
+    if !runtime.spec.capabilities.desktop_identity {
+        return;
+    }
+    let _ = platform.register_identity(
+        runtime.spec,
+        &profile.label,
+        &wm_class(runtime.spec.id, &profile.id),
+    );
 }
 
 #[tauri::command]
-pub fn list_profiles(state: tauri::State<AppState>) -> Result<Vec<ProfileView>, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    Ok(to_views(&store))
+pub fn list_apps(state: tauri::State<AppState>) -> Result<Vec<AppView>, String> {
+    state
+        .apps
+        .iter()
+        .map(|runtime| {
+            let store = runtime.store.lock().map_err(|e| e.to_string())?;
+            Ok(AppView {
+                id: runtime.spec.id.to_string(),
+                label: runtime.spec.label.to_string(),
+                unavailable: state.availability(runtime),
+                profiles: to_views(runtime.spec, &store),
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
 pub fn add_profile(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
+    app_id: String,
     label: String,
 ) -> Result<ProfileView, String> {
-    let mut store = state.store.lock().map_err(|e| e.to_string())?;
+    let runtime = state.app(&app_id).map_err(|e| e.to_string())?;
+    let mut store = runtime.store.lock().map_err(|e| e.to_string())?;
     let label = validate_label(&store, &label, "")?;
-    let created = store.add(&label, &state.paths).map_err(|e| e.to_string())?;
-    store.save(&state.paths).map_err(|e| e.to_string())?;
-    let view = to_views(&store)
+    let created = store
+        .add(&label, &runtime.paths)
+        .map_err(|e| e.to_string())?;
+    store.save(&runtime.paths).map_err(|e| e.to_string())?;
+    let view = to_views(runtime.spec, &store)
         .into_iter()
         .find(|v| v.id == created.id)
         .ok_or_else(|| "profile vanished after creation".to_string())?;
-    let _ = state.platform.register_identity(&created);
+    register_identity(&*state.platform, runtime, &created);
     drop(store);
     let _ = crate::tray::rebuild(&app);
     Ok(view)
@@ -118,10 +159,12 @@ pub fn add_profile(
 pub fn rename_profile(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
+    app_id: String,
     id: String,
     label: String,
 ) -> Result<(), String> {
-    let mut store = state.store.lock().map_err(|e| e.to_string())?;
+    let runtime = state.app(&app_id).map_err(|e| e.to_string())?;
+    let mut store = runtime.store.lock().map_err(|e| e.to_string())?;
     store
         .get(&id)
         .ok_or_else(|| format!("no profile with id {id}"))?;
@@ -129,9 +172,9 @@ pub fn rename_profile(
     // (or only changing its capitalisation) is not reported as a collision.
     let label = validate_label(&store, &label, &id)?;
     store.rename(&id, &label).map_err(|e| e.to_string())?;
-    store.save(&state.paths).map_err(|e| e.to_string())?;
+    store.save(&runtime.paths).map_err(|e| e.to_string())?;
     if let Some(renamed) = store.get(&id) {
-        register_renamed_identity(&*state.platform, renamed);
+        register_identity(&*state.platform, runtime, renamed);
     }
     drop(store);
     let _ = crate::tray::rebuild(&app);
@@ -142,17 +185,25 @@ pub fn rename_profile(
 pub fn delete_profile(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
+    app_id: String,
     id: String,
 ) -> Result<(), String> {
-    let mut store = state.store.lock().map_err(|e| e.to_string())?;
+    let runtime = state.app(&app_id).map_err(|e| e.to_string())?;
+    let mut store = runtime.store.lock().map_err(|e| e.to_string())?;
     let profile = store
         .get(&id)
         .cloned()
         .ok_or_else(|| format!("no profile with id {id}"))?;
-    refuse_if_running(&*state.platform, &profile).map_err(|e| e.to_string())?;
-    let _ = state.platform.unregister_identity(&profile);
-    store.remove(&id, &state.paths).map_err(|e| e.to_string())?;
-    store.save(&state.paths).map_err(|e| e.to_string())?;
+    refuse_if_running(&*state.platform, runtime.spec, &profile).map_err(|e| e.to_string())?;
+    if runtime.spec.capabilities.desktop_identity {
+        let _ = state
+            .platform
+            .unregister_identity(&wm_class(runtime.spec.id, &profile.id));
+    }
+    store
+        .remove(&id, &runtime.paths)
+        .map_err(|e| e.to_string())?;
+    store.save(&runtime.paths).map_err(|e| e.to_string())?;
     drop(store);
     let _ = crate::tray::rebuild(&app);
     Ok(())
@@ -200,149 +251,105 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn profile_size_bytes(state: tauri::State<AppState>, id: String) -> Result<u64, String> {
+pub fn profile_size_bytes(
+    state: tauri::State<AppState>,
+    app_id: String,
+    id: String,
+) -> Result<u64, String> {
     // Take the path and let the lock go. Walking a profile directory is seconds of
     // I/O on a large account, and the tray rebuild wants this same mutex from the
     // main thread on every hover — holding it across the walk freezes the whole app.
-    let path = {
-        let store = state.store.lock().map_err(|e| e.to_string())?;
-        store
-            .get(&id)
-            .map(|profile| profile.path.clone())
-            .ok_or_else(|| format!("no profile with id {id}"))?
-    };
-    directory_size(&path).map_err(|e| e.to_string())
+    let (_, profile) = state.profile(&app_id, &id).map_err(|e| e.to_string())?;
+    directory_size(&profile.path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_spec;
     use crate::paths::Paths;
-    use crate::profile_store::ProfileStore;
+    use crate::platform::RunningProcess;
+    use crate::shared_config::tests_support::FakePlatform;
+    use std::path::PathBuf;
+
+    fn store_in(dir: &Path) -> (Paths, ProfileStore) {
+        let paths = Paths::new(dir.join("root"));
+        let def = dir.join("stock");
+        std::fs::create_dir_all(&def).unwrap();
+        let store = ProfileStore::load(&paths, &def).unwrap();
+        (paths, store)
+    }
 
     #[test]
     fn profiles_sharing_an_account_are_flagged_in_the_view() {
         let d = tempfile::tempdir().unwrap();
-        let paths = Paths::new(d.path().join("root"));
-        let def = d.path().join("stock");
-        std::fs::create_dir_all(&def).unwrap();
-        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let (paths, mut store) = store_in(d.path());
         let a = store.add("A", &paths).unwrap();
         let b = store.add("B", &paths).unwrap();
-        store.set_account_uuid(&a.id, Some("same".into()));
-        store.set_account_uuid(&b.id, Some("same".into()));
+        store.set_account(&a.id, Some("same".into()));
+        store.set_account(&b.id, Some("same".into()));
 
-        let views = to_views(&store);
+        let views = to_views(&app_spec::CLAUDE, &store);
 
         assert!(views.iter().find(|v| v.id == a.id).unwrap().shares_account);
         assert!(views.iter().find(|v| v.id == b.id).unwrap().shares_account);
-        assert!(!views[0].shares_account); // Default has no uuid
+        assert!(!views[0].shares_account); // the stock profile has no account
     }
 
     #[test]
-    fn renaming_a_default_profile_registers_only_the_new_identity() {
-        use crate::platform::{FocusOutcome, Platform, RunningInstance};
-        use std::path::{Path, PathBuf};
-        use std::sync::{Arc, Mutex};
-
-        struct RecordingPlatform {
-            registrations: Arc<Mutex<Vec<Profile>>>,
-        }
-
-        impl Platform for RecordingPlatform {
-            fn data_root(&self) -> anyhow::Result<PathBuf> {
-                Ok(PathBuf::new())
-            }
-
-            fn default_profile_dir(&self) -> anyhow::Result<PathBuf> {
-                Ok(PathBuf::new())
-            }
-
-            fn claude_binary(&self) -> anyhow::Result<PathBuf> {
-                Ok(PathBuf::new())
-            }
-
-            fn running_instances(&self) -> anyhow::Result<Vec<RunningInstance>> {
-                Ok(Vec::new())
-            }
-
-            fn link_shared_config(
-                &self,
-                _profile_dir: &Path,
-                _shared: &Path,
-            ) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            fn focus(&self, _pid: i32, _profile_id: &str) -> anyhow::Result<FocusOutcome> {
-                Ok(FocusOutcome::Focused)
-            }
-
-            fn quit(&self, _pid: i32) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            fn register_identity(&self, profile: &Profile) -> anyhow::Result<()> {
-                self.registrations.lock().unwrap().push(profile.clone());
-                Ok(())
-            }
-        }
-
+    fn a_view_carries_the_app_it_belongs_to() {
+        // The window needs it to send the right app id back on every action.
         let d = tempfile::tempdir().unwrap();
-        let paths = Paths::new(d.path().join("root"));
-        let default_dir = d.path().join("stock");
-        std::fs::create_dir_all(&default_dir).unwrap();
-        let mut store = ProfileStore::load(&paths, &default_dir).unwrap();
-        store.rename("default", "Personal").unwrap();
-        let renamed = store.get("default").cloned().unwrap();
-        let registrations = Arc::new(Mutex::new(Vec::new()));
-        let platform = RecordingPlatform {
-            registrations: Arc::clone(&registrations),
-        };
-
-        register_renamed_identity(&platform, &renamed);
-
-        let registrations = registrations.lock().unwrap();
-        assert_eq!(registrations.len(), 1);
-        assert_eq!(registrations[0].id, "default");
-        assert_eq!(registrations[0].label, "Personal");
+        let (_, store) = store_in(d.path());
+        assert_eq!(to_views(&app_spec::CODEX, &store)[0].app_id, "codex");
     }
 
     #[test]
     fn deletion_is_refused_when_the_profile_has_a_running_instance() {
-        use crate::platform::RunningInstance;
-        use crate::shared_config::tests_support::FakePlatform;
-        use std::path::PathBuf;
-
-        let profile = crate::profile_store::Profile {
+        let profile = Profile {
             id: "work".into(),
             label: "Work".into(),
             path: PathBuf::from("/profiles/work"),
             is_default: false,
-            last_known_account_uuid: None,
+            account: None,
         };
-        let platform = FakePlatform::with_running(vec![RunningInstance {
+        let platform = FakePlatform::with_running(vec![RunningProcess {
+            app_id: "codex",
             pid: 4242,
-            user_data_dir: Some(profile.path.clone()),
+            profile_dir: Some(profile.path.clone()),
         }]);
 
-        let error = refuse_if_running(&platform, &profile)
+        let error = refuse_if_running(&platform, &app_spec::CODEX, &profile)
             .unwrap_err()
             .to_string();
         assert_eq!(
             error,
-            "quit this profile's Claude Desktop before deleting it"
+            "quit this profile's the ChatGPT desktop app before deleting it"
         );
+    }
+
+    #[test]
+    fn deletion_is_allowed_when_only_the_other_app_is_running() {
+        let profile = Profile {
+            id: "work".into(),
+            label: "Work".into(),
+            path: PathBuf::from("/profiles/work"),
+            is_default: false,
+            account: None,
+        };
+        let platform = FakePlatform::with_running(vec![RunningProcess {
+            app_id: "claude",
+            pid: 4242,
+            profile_dir: Some(profile.path.clone()),
+        }]);
+
+        assert!(refuse_if_running(&platform, &app_spec::CODEX, &profile).is_ok());
     }
 
     #[test]
     fn a_blank_label_is_refused() {
         let d = tempfile::tempdir().unwrap();
-        let paths = Paths::new(d.path().join("root"));
-        let def = d.path().join("stock");
-        std::fs::create_dir_all(&def).unwrap();
-        let store = ProfileStore::load(&paths, &def).unwrap();
-
+        let (_, store) = store_in(d.path());
         assert!(validate_label(&store, "   ", "").is_err());
         assert_eq!(validate_label(&store, "  Kerja  ", "").unwrap(), "Kerja");
     }
@@ -350,16 +357,26 @@ mod tests {
     #[test]
     fn a_label_already_taken_by_another_profile_is_refused() {
         let d = tempfile::tempdir().unwrap();
-        let paths = Paths::new(d.path().join("root"));
-        let def = d.path().join("stock");
-        std::fs::create_dir_all(&def).unwrap();
-        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let (paths, mut store) = store_in(d.path());
         let kerja = store.add("Kerja", &paths).unwrap();
 
         // Case differences still collide: two tray rows a person cannot tell apart.
         assert!(validate_label(&store, "kerja", "").is_err());
         // But a profile may keep, or re-case, its own label.
         assert_eq!(validate_label(&store, "KERJA", &kerja.id).unwrap(), "KERJA");
+    }
+
+    #[test]
+    fn the_same_label_under_two_apps_is_allowed() {
+        // Each app has its own store, and the tray puts them under separate
+        // headers — there is nothing for a user to confuse.
+        let d = tempfile::tempdir().unwrap();
+        let (paths_a, mut claude) = store_in(&d.path().join("claude"));
+        let (_, codex) = store_in(&d.path().join("codex"));
+        claude.add("Kerja", &paths_a).unwrap();
+
+        assert!(validate_label(&claude, "Kerja", "").is_err());
+        assert!(validate_label(&codex, "Kerja", "").is_ok());
     }
 
     #[test]

@@ -1,53 +1,60 @@
 mod account;
+mod app_spec;
 mod commands;
 mod instance_manager;
 mod paths;
 mod platform;
 mod profile_store;
+mod runtime;
 mod shared_config;
 mod tray;
 
+use crate::platform::{find_for, wm_class, FocusHint};
+use crate::runtime::AppState;
 use anyhow::{anyhow, Result};
 use tauri::{Emitter, Manager};
 
-fn profile(app: &tauri::AppHandle, id: &str) -> Result<profile_store::Profile> {
-    let state = app
-        .try_state::<tray::AppState>()
-        .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| anyhow!("Claude Profiles profile store is unavailable"))?;
-    store
-        .get(id)
-        .cloned()
-        .ok_or_else(|| anyhow!("no profile with id {id}"))
+fn state(app: &tauri::AppHandle) -> Result<tauri::State<'_, AppState>> {
+    app.try_state::<AppState>()
+        .ok_or_else(|| anyhow!("Agent Profiles state is not available"))
+}
+
+/// Finds the pid for one profile, rescanning rather than trusting the menu.
+///
+/// A menu built seconds ago can name a process that has since exited, and the
+/// pid would then belong to whatever the OS handed the number to next.
+fn live_pid(app: &tauri::AppHandle, app_id: &str, profile_id: &str) -> Result<i32> {
+    let state = state(app)?;
+    let (runtime, profile) = state.profile(app_id, profile_id)?;
+    let processes = state.platform.scan(&[instance_manager::scan_target(
+        &*state.platform,
+        runtime.spec,
+    )])?;
+    find_for(
+        &processes,
+        runtime.spec.id,
+        &profile.path,
+        profile.is_default,
+    )
+    .ok_or_else(|| anyhow!("{} is no longer running", profile.label))
 }
 
 fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
-    let (action, profile_id) = match id.split_once(':') {
-        Some((action, profile_id)) => (Some(action), Some(profile_id)),
-        None => (None, None),
-    };
-
-    match (action, profile_id) {
-        (Some("launch"), Some(id)) => {
-            let state = app
-                .try_state::<tray::AppState>()
-                .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
-            let profile = profile(app, id)?;
-            instance_manager::launch(&*state.platform, &profile, &state.paths)?;
+    match tray::parse_row_id(id) {
+        Some(("launch", app_id, profile_id)) => {
+            let state = state(app)?;
+            let (runtime, profile) = state.profile(app_id, profile_id)?;
+            instance_manager::launch(&*state.platform, runtime.spec, &profile, &runtime.paths)?;
             tray::rebuild(app)?;
         }
-        (Some("focus"), Some(id)) => {
-            let profile = profile(app, id)?;
-            let state = app
-                .try_state::<tray::AppState>()
-                .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
-            let instances = state.platform.running_instances()?;
-            let pid = crate::platform::find_for(&instances, &profile.path, profile.is_default)
-                .ok_or_else(|| anyhow!("{} is no longer running", profile.label))?;
-            match state.platform.focus(pid, &profile.id)? {
+        Some(("focus", app_id, profile_id)) => {
+            let pid = live_pid(app, app_id, profile_id)?;
+            let state = state(app)?;
+            let (runtime, profile) = state.profile(app_id, profile_id)?;
+            let hint = FocusHint {
+                wm_class: &wm_class(runtime.spec.id, &profile.id),
+            };
+            match state.platform.focus(pid, &hint)? {
                 platform::FocusOutcome::Focused => {
                     tray::rebuild(app)?;
                 }
@@ -58,30 +65,26 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
                 }
             }
         }
-        (Some("quit"), Some(id)) => {
-            let profile = profile(app, id)?;
-            let state = app
-                .try_state::<tray::AppState>()
-                .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
-            let instances = state.platform.running_instances()?;
-            let pid = crate::platform::find_for(&instances, &profile.path, profile.is_default)
-                .ok_or_else(|| anyhow!("{} is no longer running", profile.label))?;
+        Some(("quit", app_id, profile_id)) => {
+            let pid = live_pid(app, app_id, profile_id)?;
+            let product = {
+                let state = state(app)?;
+                state.app(app_id)?.spec.product
+            };
             let app = app.clone();
             let worker_app = app.clone();
             let thread = std::thread::Builder::new()
-                .name("claude-profiles-quit".into())
+                .name("agent-profiles-quit".into())
                 .spawn(move || {
                     let result = (|| -> Result<()> {
-                        let state = worker_app
-                            .try_state::<tray::AppState>()
-                            .ok_or_else(|| anyhow!("Claude Profiles state is not available"))?;
+                        let state = state(&worker_app)?;
                         state.platform.quit(pid)?;
                         tray::rebuild(&worker_app)?;
                         Ok(())
                     })();
                     if let Err(error) = result {
                         eprintln!("tray quit action failed: {error}");
-                        let reason = format!("Could not quit Claude Desktop: {error}");
+                        let reason = format!("Could not quit {product}: {error}");
                         if let Err(rebuild_error) =
                             tray::rebuild_with_error(&worker_app, Some(&reason))
                         {
@@ -95,7 +98,9 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
                 tray::rebuild_with_error(&app, Some(&reason))?;
             }
         }
-        (None, None) if id == "manage" => {
+        // Headers, error rows and anything else carrying a colon are inert.
+        Some(_) => {}
+        None if id == "manage" => {
             let window = app
                 .get_webview_window("main")
                 .ok_or_else(|| anyhow!("management window is not available"))?;
@@ -106,10 +111,10 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) -> Result<()> {
             // again so it can refresh, instead of showing a verdict from last time.
             window.emit("window-shown", ())?;
         }
-        (None, None) if id == "quit_app" => {
+        None if id == "quit_app" => {
             app.exit(0);
         }
-        _ => {}
+        None => {}
     }
 
     Ok(())
@@ -135,7 +140,7 @@ pub(crate) fn close_hides_window(label: &str) -> bool {
 
 /// `None` means a person closed the last window, which for a tray app is not a
 /// request to quit — the tray is still there. `Some` only ever comes from our own
-/// `app.exit()`, i.e. the "Quit Claude Profiles" row, which really must quit.
+/// `app.exit()`, i.e. the "Quit Agent Profiles" row, which really must quit.
 pub(crate) fn exit_should_be_prevented(code: Option<i32>) -> bool {
     code.is_none()
 }
@@ -151,7 +156,7 @@ pub fn run() {
             None,
         ))
         .invoke_handler(tauri::generate_handler![
-            commands::list_profiles,
+            commands::list_apps,
             commands::add_profile,
             commands::rename_profile,
             commands::delete_profile,
@@ -201,17 +206,14 @@ pub fn run() {
             }
 
             let platform = platform::current();
-            let paths = paths::Paths::new(platform.data_root()?);
-            let default_dir = platform.default_profile_dir()?;
-            let store = profile_store::ProfileStore::load(&paths, &default_dir)?;
-            app.manage(tray::AppState {
+            let apps = runtime::build(&*platform)?;
+            app.manage(AppState {
                 platform,
-                paths,
-                store: std::sync::Mutex::new(store),
+                apps,
                 last_menu: std::sync::Mutex::new(None),
             });
 
-            if let Some(state) = app.try_state::<tray::AppState>() {
+            if let Some(state) = app.try_state::<AppState>() {
                 tray::sync_identities(&state);
             }
             tray::rebuild(app.handle())?;
@@ -227,7 +229,7 @@ pub fn run() {
                 }
             }
         }),
-        Err(error) => eprintln!("Claude Profiles failed to run: {error}"),
+        Err(error) => eprintln!("Agent Profiles failed to run: {error}"),
     }
 }
 
@@ -245,7 +247,7 @@ mod tests {
     fn only_our_own_quit_row_is_allowed_to_end_the_process() {
         // A person closing the last window reports no code; the tray lives on.
         assert!(exit_should_be_prevented(None));
-        // `app.exit(0)` from "Quit Claude Profiles" reports one, and must win.
+        // `app.exit(0)` from "Quit Agent Profiles" reports one, and must win.
         assert!(!exit_should_be_prevented(Some(0)));
     }
 }

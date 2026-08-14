@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    claude_profiles_lib::run()
+    agent_profiles_lib::run()
 }
