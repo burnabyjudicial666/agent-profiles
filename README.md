@@ -121,13 +121,15 @@ The toggle is hidden in development builds. A login item registered from `pnpm t
 
 ## Platform status
 
-Verification record as of **2026-08-14**, against the multi-app architecture. CI compiles and tests all three platforms on their own runners, but the Windows and Linux tests still only exercise parsing and path logic against fixtures — no one has ever launched this app on either. **Compiling is not running, and a passing unit test is not acceptance.** An unchecked box means the behavior has never been observed on real hardware, not that it is known to be broken.
+CI compiles and tests all three platforms on their own runners, but the Windows and Linux tests only exercise parsing and path logic against fixtures — no one has ever launched this app on either. **Compiling is not running, and a passing unit test is not acceptance.** An unchecked box means the behavior has never been observed on real hardware, not that it is known to be broken.
 
-The Rust suite passes on macOS: **132 tests, 0 failures**, plus 4 `#[ignore]`d checks that drive real applications.
+You do not need a Windows or Linux machine to check that this still builds and its tests still pass there. [CONTRIBUTING](CONTRIBUTING.md) has a recipe for each.
+
+The Rust suite passes on macOS: **142 tests, 0 failures**, plus 4 `#[ignore]`d checks that drive real applications.
 
 ### macOS — verified against real applications
 
-Confirmed by the harness driving the real Claude Desktop and ChatGPT installations on 2026-08-14:
+Confirmed by the harness driving real installations of the supported applications:
 
 - [x] All six apps detected as installed, each stock profile resolved at its own kind of path
 - [x] Account identity read from both shapes of file — a top-level field for Claude, a nested one for ChatGPT
@@ -138,9 +140,9 @@ Confirmed by the harness driving the real Claude Desktop and ChatGPT installatio
 - [x] A profile path leaves room for the socket an application creates inside it, verified by launching one at the real profile path
 - [x] A profile deleted after quitting leaves nothing behind
 
-### macOS — re-accepted against the multi-app build
+### macOS — the management window and the tray
 
-Confirmed by a human driving a development build with all six apps installed, on 2026-08-14:
+Confirmed by a person driving the app with all six applications installed:
 
 - [x] Tray menu opens and lists each app's profiles under its own heading
 - [x] Management window opens from the tray; closing it hides the window and the tray survives

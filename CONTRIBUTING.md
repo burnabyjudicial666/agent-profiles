@@ -33,7 +33,7 @@ Run what CI runs:
 pnpm check
 ```
 
-That covers the platform you are on. The two below let you cover the other ones from a Mac before CI does, which is worth the trouble: the Linux recipe caught a `-D warnings` failure that had been sitting in this repository unnoticed, because the commit that introduced it had never been pushed.
+That covers the platform you are on. The two recipes below cover the other ones from a Mac, and they are worth the trouble: a `-D warnings` failure on a platform you cannot build for is invisible until CI says so, and each of these finds one in minutes.
 
 ### Checking the Windows build from macOS
 
