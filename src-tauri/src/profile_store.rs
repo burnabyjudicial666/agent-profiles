@@ -106,20 +106,38 @@ impl ProfileStore {
             account: None,
         };
         self.profiles.push(profile.clone());
+        // The registry is the commit point. A profile the registry does not
+        // record does not exist, so if the write fails the directory has to go
+        // back too — otherwise it lingers forever, owned by nothing.
+        if let Err(error) = self.save(paths) {
+            self.profiles.pop();
+            let _ = std::fs::remove_dir_all(&profile.path);
+            return Err(error);
+        }
         Ok(profile)
     }
 
-    pub fn rename(&mut self, id: &str, label: &str) -> Result<()> {
+    pub fn rename(&mut self, id: &str, label: &str, paths: &Paths) -> Result<()> {
         let p = self
             .profiles
             .iter_mut()
             .find(|p| p.id == id)
             .ok_or_else(|| anyhow!("no profile with id {id}"))?;
-        p.label = label.to_string();
+        let previous = std::mem::replace(&mut p.label, label.to_string());
+        if let Err(error) = self.save(paths) {
+            self.rename_in_memory(id, &previous);
+            return Err(error);
+        }
         Ok(())
     }
 
-    pub fn remove(&mut self, id: &str, _paths: &Paths) -> Result<()> {
+    fn rename_in_memory(&mut self, id: &str, label: &str) {
+        if let Some(p) = self.profiles.iter_mut().find(|p| p.id == id) {
+            p.label = label.to_string();
+        }
+    }
+
+    pub fn remove(&mut self, id: &str, paths: &Paths) -> Result<()> {
         let idx = self
             .profiles
             .iter()
@@ -129,6 +147,14 @@ impl ProfileStore {
             return Err(anyhow!("the Default profile cannot be removed"));
         }
         let removed = self.profiles.remove(idx);
+        // Write the registry BEFORE the directory goes. Deleting first and
+        // saving second means a failed save leaves an entry pointing at bytes
+        // that no longer exist — the app would list a profile it had already
+        // destroyed. This way a failed save costs the user nothing at all.
+        if let Err(error) = self.save(paths) {
+            self.profiles.insert(idx, removed);
+            return Err(error);
+        }
         if removed.path.exists() {
             std::fs::remove_dir_all(&removed.path)?;
         }
@@ -241,7 +267,7 @@ mod tests {
             // Labels are validated at the command layer, not here, so reusing
             // one is fine and keeps this focused on the id.
             store
-                .rename(&created.id, &format!("x{}", created.id))
+                .rename(&created.id, &format!("x{}", created.id), &paths)
                 .unwrap();
         }
     }
@@ -259,9 +285,52 @@ mod tests {
         let (_d, paths, def) = fixture();
         let mut store = ProfileStore::load(&paths, &def).unwrap();
         let p = store.add("Kerja", &paths).unwrap();
-        store.rename(&p.id, "Kantor").unwrap();
+        store.rename(&p.id, "Kantor", &paths).unwrap();
         assert_eq!(store.get(&p.id).unwrap().label, "Kantor");
         assert_eq!(store.get(&p.id).unwrap().path, p.path);
+    }
+
+    /// Makes `save` fail without needing a full disk: a directory standing where
+    /// `profiles.json` belongs cannot be written to. Everything else about the
+    /// layout still works, so the failure lands exactly where it is wanted.
+    fn block_the_registry(paths: &Paths) {
+        std::fs::remove_file(paths.profiles_json()).ok();
+        std::fs::create_dir_all(paths.profiles_json()).unwrap();
+    }
+
+    #[test]
+    fn a_registry_that_cannot_be_written_does_not_cost_the_user_their_data() {
+        // The whole point of saving before deleting: the user asked to remove a
+        // profile, the registry write failed, and their data is still there to
+        // try again with rather than gone with no record of it.
+        let (_d, paths, def) = fixture();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        let p = store.add("Kerja", &paths).unwrap();
+        block_the_registry(&paths);
+
+        assert!(store.remove(&p.id, &paths).is_err());
+        assert!(p.path.is_dir(), "the directory must survive a failed save");
+        assert!(
+            store.get(&p.id).is_some(),
+            "the profile must still be listed, matching what is on disk"
+        );
+    }
+
+    #[test]
+    fn a_profile_the_registry_never_recorded_leaves_no_directory_behind() {
+        let (_d, paths, def) = fixture();
+        let mut store = ProfileStore::load(&paths, &def).unwrap();
+        block_the_registry(&paths);
+
+        assert!(store.add("Kerja", &paths).is_err());
+        assert_eq!(store.list().len(), 1, "only the stock profile remains");
+        let leftovers = std::fs::read_dir(paths.profiles_dir())
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        assert_eq!(
+            leftovers, 0,
+            "an orphaned directory is owned by nothing and cleaned up by nobody"
+        );
     }
 
     #[test]

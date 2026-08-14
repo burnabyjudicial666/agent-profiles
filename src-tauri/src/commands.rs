@@ -144,7 +144,6 @@ pub fn add_profile(
     let created = store
         .add(&label, &runtime.paths)
         .map_err(|e| e.to_string())?;
-    store.save(&runtime.paths).map_err(|e| e.to_string())?;
     let view = to_views(runtime.spec, &store)
         .into_iter()
         .find(|v| v.id == created.id)
@@ -171,8 +170,9 @@ pub fn rename_profile(
     // Exclude this profile from the duplicate check, so re-saving its own label
     // (or only changing its capitalisation) is not reported as a collision.
     let label = validate_label(&store, &label, &id)?;
-    store.rename(&id, &label).map_err(|e| e.to_string())?;
-    store.save(&runtime.paths).map_err(|e| e.to_string())?;
+    store
+        .rename(&id, &label, &runtime.paths)
+        .map_err(|e| e.to_string())?;
     if let Some(renamed) = store.get(&id) {
         register_identity(&*state.platform, runtime, renamed);
     }
@@ -203,7 +203,6 @@ pub fn delete_profile(
     store
         .remove(&id, &runtime.paths)
         .map_err(|e| e.to_string())?;
-    store.save(&runtime.paths).map_err(|e| e.to_string())?;
     drop(store);
     let _ = crate::tray::rebuild(&app);
     Ok(())
