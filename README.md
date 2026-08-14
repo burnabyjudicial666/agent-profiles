@@ -1,102 +1,193 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Claude Profiles — run several Claude Desktop accounts side by side, one profile each" width="100%">
+  <img src="assets/banner.png" alt="Agent Profiles — run your coding agents side by side, one profile each" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/husniadil/claude-profiles/actions/workflows/ci.yml"><img src="https://github.com/husniadil/claude-profiles/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/husniadil/agent-profiles/actions/workflows/ci.yml"><img src="https://github.com/husniadil/agent-profiles/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT licence"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platforms">
 </p>
 
-# Claude Profiles
+# Agent Profiles
 
-> **Unofficial.** This is a third-party tool with no affiliation to, endorsement by, or support from Anthropic. "Claude" and "Claude Desktop" are trademarks of Anthropic. This project only launches the Claude Desktop you already installed, with a different user-data directory.
+> **Unofficial.** This is a third-party tool with no affiliation to, endorsement by, or support from Anthropic or OpenAI. "Claude" and "Claude Desktop" are trademarks of Anthropic; "ChatGPT" and "Codex" are trademarks of OpenAI. This project only launches the applications you already installed, pointed at a different profile directory.
 
-Claude Profiles is a menu bar and system tray app for running multiple Claude Desktop instances in parallel, with one profile per account. Each profile has its own permanently separate Electron user-data directory, so using one account does not require signing out of another.
+Agent Profiles is a menu bar and system tray app for running several accounts of a coding-agent desktop app in parallel, one profile each. Every profile gets its own permanently separate directory, so using one account never requires signing out of another — and profiles of different apps can run at the same time.
 
-The **Default** profile is the Claude Desktop installation that already exists on the machine. Claude Profiles uses that profile in place: it does not move or copy the directory, and launches it without a `--user-data-dir` argument. Additional profiles live below the Claude Profiles data root and receive their own user-data directories.
+## Supported apps
+
+| App | Profile is selected by | Shared file | Platforms | Notes |
+| --- | --- | --- | --- | --- |
+| **Claude** (Claude Desktop) | `--user-data-dir` | `claude_desktop_config.json` | macOS, Windows, Linux | |
+| **ChatGPT** (bundle id `com.openai.codex`) | `--user-data-dir` **and** `CODEX_HOME` | `config.toml` | macOS, Windows, Linux | the `codex` CLI reads the same `CODEX_HOME` |
+| **Cursor** | `--user-data-dir` | — | macOS | |
+| **Devin** | `--user-data-dir` | — | macOS | ships as Devin, identifies as `com.exafunction.windsurf` |
+| **T3 Code** | `--user-data-dir` | — | macOS | |
+| **VS Code** | `--user-data-dir` | — | macOS | |
+
+Every one of these was confirmed against a real installation by the probe described below, never declared from inspection alone.
+
+**Platforms** lists where an app has actually been checked. Where it has not, the app is simply absent — no tray section, no directory, no error row — because a user has no way of knowing this build was never tried on their system, and a row that can only fail is worse than no row. The same is true of an app that is not installed: someone with one app sees exactly the flat menu they would have seen if the others never existed.
+
+`Shared file` is empty where no file has an obvious claim to being shared between an app's profiles. For the VS Code family `User/settings.json` is a plausible candidate, but that is a product decision rather than something a probe can establish, so nothing is shared until someone decides.
+
+### How a profile is pinned to a process
+
+Every supported app has to answer two separate questions, and they are not the same question:
+
+- **Writing** — how is a launching process told which profile to use? An argument, an environment variable, or several at once.
+- **Reading back** — how do we tell, later, which profile a running process belongs to?
+
+Writing is cheap on any channel. Reading is not: recovering an argument means parsing the process table, which is routine, whereas recovering an environment variable means `KERN_PROCARGS2` on macOS, `/proc/pid/environ` on Linux and `NtQueryInformationProcess` on Windows.
+
+So an app may write through as many channels as it needs, provided at least one of them is readable. ChatGPT is exactly that case: it needs `--user-data-dir` to move Chromium's data **and its single-instance lock**, and `CODEX_HOME` to move the credentials and configuration that are actually worth separating. Both point at the same directory, so a profile stays one folder.
+
+### Why profile paths are short
+
+A profile directory is `<data root>/<app id>/p/<8 characters>` rather than something more readable, and the app ids are terse for the same reason.
+
+Several of these applications create a Unix domain socket **inside** the profile directory — VS Code writes `<version>-main.sock`, the ChatGPT desktop app writes `ipc/ipc.sock`. macOS caps a socket path at 104 bytes and Linux at 108, and that budget is shared by every naming decision above it: the product name, the app id, the profile id, and the length of the user's home directory, which is not ours to choose.
+
+The numbers are measured, not assumed. At a 94-byte socket path VS Code started with nine processes and created its socket; at 109 bytes exactly one process survived and no socket appeared. The ChatGPT desktop app is less brittle and merely loses its socket in silence, which is harder to diagnose. An earlier layout of `profiles/<uuid>` put a perfectly ordinary installation 17 bytes over the limit before the application had written a single byte.
+
+Because the home directory can still be long enough to exhaust the budget, creating a profile that would leave no room for a socket is refused outright, with the numbers in the message. It is the same fail-closed choice made when a process scan fails: a profile that half-works is far harder to diagnose than one that was never created.
+
+### The Default profile
+
+The **Default** profile is the installation that already exists on the machine — `~/Library/Application Support/Claude` for Claude, `~/.codex` for ChatGPT. Agent Profiles uses it in place: it never moves or copies the directory, and launches it with **no designation at all**, neither argument nor environment variable. Anything else would make it a different profile and orphan everything already there. Additional profiles live below the Agent Profiles data root and get their own directories.
 
 ## Important safety behavior
 
-Claude Desktop does not provide a single-instance lock for a user-data directory. Starting two processes against the same directory can corrupt its databases. Claude Profiles therefore rescans processes immediately before every launch. A profile that is already running gets a Focus action instead of a second launch, and an unreadable process scan fails closed.
+Claude Desktop provides no single-instance lock for a user-data directory, and starting two processes against the same directory can corrupt its databases. ChatGPT does hold one, but a duplicate exits silently, which to a user looks like a launch that did nothing.
 
-Profile labels are manual. Account email addresses are not read from disk or displayed. The stored `lastKnownAccountUuid` value is used only to warn when two profiles appear to be signed in to the same account.
+Agent Profiles therefore rescans processes immediately before every launch. A profile that is already running gets a Focus action instead of a second launch, and an unreadable process scan **fails closed** — refusing costs one retry, guessing costs a profile.
 
-## Shared MCP configuration
+Profile labels are manual. Account email addresses are never read from disk or displayed. Each app's account identifier — `lastKnownAccountUuid` for Claude, `tokens.account_id` for ChatGPT — is used only to warn that two profiles appear to be signed in to the same account, and only ever compared **within one app**: those two values share no namespace, so comparing across apps could produce nothing but a false warning.
 
-The MCP configuration is shared across every profile. Claude Profiles keeps one source-of-truth file at its data root and links each profile's `claude_desktop_config.json` to it before launch:
+## Shared configuration
+
+Each app's shared configuration file is shared across that app's profiles. Agent Profiles keeps one source-of-truth copy per app and links each profile's file to it before launch:
 
 - **macOS and Linux:** symbolic links.
-- **Windows:** hardlinks, so Developer Mode or elevation is not required. The files must be on the same drive.
+- **Windows:** hardlinks, so Developer Mode or elevation is not required. Both paths must be on the same drive.
 
-If a profile has an existing regular configuration file, its contents are adopted into the shared configuration when there is no shared file yet. When a shared configuration already exists, the displaced profile file is retained rather than silently overwriting the configuration used by the other profiles.
+If a profile has an existing regular file, its contents are adopted into the shared copy when there is no shared file yet. When a shared file already exists, the profile's own copy is moved aside to `<filename>.replaced` rather than silently overwriting the configuration every other profile is using.
+
+## Adding another app
+
+An app is a data declaration in `src-tauri/src/app_spec.rs` — one `AppSpec` constant and one line in the registry. No OS backend is touched, which is what keeps the third app cheaper than the second.
+
+Before declaring one, answer four questions. All four must be yes:
+
+1. Can a profile be expressed as **one directory**?
+2. Can that directory be **selected at launch**, through an argument or the environment?
+3. Can the selection be **read back** off a running process?
+4. Does **no global lock** survive the directories being separated?
+
+These are limits, not obstacles to work around. A sandboxed app fails (2) because the system pins its container. An app keeping its credentials in the system keychain fails (1) because its profile is not a directory at all. Better to find that out at the declaration than three days into an implementation.
+
+The four questions have an executable form. After declaring an app, run the manual harness against a real installation:
+
+```bash
+cd src-tauri
+PROBE_APP=/Applications/Something.app cargo test -- --ignored probe --nocapture
+```
+
+The probe launches the application twice, works out which channels move its
+profile and which are ignored, checks whether a second profile can live
+alongside the first, and prints a draft declaration with the parts it cannot
+know marked `TODO`. It runs at a path as long as the real profile layout, and
+reports the socket budget every time — an id that is too long fails here rather
+than in a user's tray. Try a shorter one with `PROBE_ID=<id>`.
+
+Once declared, the same harness exercises it end to end:
+
+```bash
+cargo test -- --ignored --nocapture                          # every check
+VERIFY_APP=<app id> cargo test -- --ignored launch_detect    # just the new app
+```
+
+It creates a profile, launches the real application, confirms a process scan attributes it back to that profile, confirms the app wrote its state into the profile directory rather than the stock one, quits it, and cleans up. These checks launch real applications, so they are `#[ignore]`d and never run in CI or in a normal `cargo test`.
+
+Declare an app only for the platforms someone has actually checked. Leaving a platform's row out is honest; filling it with a plausible-looking path is a guess that ships.
 
 ## Launch at login
 
 The management window offers an opt-in **Launch at login** toggle. It is off until you turn it on, and it starts only the tray: no profile is opened for you.
 
-The operating system owns this setting — a login item on macOS, a registry entry on Windows, an autostart desktop entry on Linux. Claude Profiles keeps no copy of it and reads the real value each time the window opens, so turning it off in your system settings is reflected here rather than contradicted.
+The operating system owns this setting — a login item on macOS, a registry entry on Windows, an autostart desktop entry on Linux. Agent Profiles keeps no copy of it and reads the real value each time the window opens, so turning it off in your system settings is reflected here rather than contradicted.
 
 The toggle is hidden in development builds. A login item registered from `pnpm tauri dev` would point at a `target/debug` binary that moves, gets rebuilt, and disappears on `cargo clean`, leaving an entry that fails silently at every boot.
 
 ## Platform status
 
-Verification record as of **2026-08-13**. CI now compiles and tests all three platforms on their own runners, but the Windows and Linux tests still only exercise parsing and path logic against fixtures — no one has ever launched this app on either. **Compiling is not running, and a passing unit test is not acceptance.** An unchecked box below means the behavior has never been observed on real hardware, not that it is known to be broken.
+Verification record as of **2026-08-14**, against the multi-app architecture. CI compiles and tests all three platforms on their own runners, but the Windows and Linux tests still only exercise parsing and path logic against fixtures — no one has ever launched this app on either. **Compiling is not running, and a passing unit test is not acceptance.** An unchecked box means the behavior has never been observed on real hardware, not that it is known to be broken.
 
-The full Rust suite passes on macOS: **64 tests, 0 failures.**
+The Rust suite passes on macOS: **132 tests, 0 failures**, plus 4 `#[ignore]`d checks that drive real applications.
 
-### macOS — verified, except the newest feature
+### macOS — verified against real applications
 
-- [x] Rust suite passes, including the Claude Desktop binary and path checks
-- [x] Two Claude Desktop processes launched directly with distinct `--user-data-dir` values both stayed alive (this is the premise the whole app rests on)
-- [x] The tray menu opens and lists the profiles
-- [x] Management window opens from the tray, and closing it hides the window instead of quitting the app — the tray survives, and Manage Profiles opens it again
-- [x] Renaming a profile works from the management window
-- [x] Blank and duplicate labels are refused
-- [x] Deleting a profile works from the management window
-- [x] Tray liveness marker updates after quitting Claude Desktop by hand
-- [x] A newly added profile appears in the tray immediately
-- [x] A second profile launches alongside Default and both stay usable through the app — two Claude Desktop instances running in parallel, which is the whole point of this app
-- [x] Deletion is refused while that profile is running
-- [x] The delete confirmation shows the directory size
-- [x] The window refuses to be resized below its usable minimum
-- [ ] The Launch at login toggle actually registers and removes a login item, and survives a reboot
+Confirmed by the harness driving the real Claude Desktop and ChatGPT installations on 2026-08-14:
 
-One box is open because the feature is newer than the acceptance run, not because it is suspected broken. The other checked boxes were confirmed by a human against the unsigned release build (`0.1.0`, Apple Silicon) on 2026-08-13, not inferred from tests. Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one, so the open boxes still need a person.
+- [x] All six apps detected as installed, each stock profile resolved at its own kind of path
+- [x] Account identity read from both shapes of file — a top-level field for Claude, a nested one for ChatGPT
+- [x] A profile launches, and a process scan attributes that pid back to it — for the argument-only app and for the argument-plus-environment one
+- [x] The designation takes effect: the launched app writes its state into the profile directory, not the stock one
+- [x] Quit terminates the instance and it disappears from the process table
+- [x] **Two apps run side by side, and neither app's process is ever attributed to the other** — the premise the whole design rests on
+- [x] A profile path leaves room for the socket an application creates inside it, verified by launching one at the real profile path
+- [x] A profile deleted after quitting leaves nothing behind
+
+### macOS — accepted on 0.1.0, not yet re-accepted
+
+These were confirmed by a human against the single-app `0.1.0` release build on 2026-08-13. The code beneath them has been restructured since, and none has been re-run against a multi-app build:
+
+- [ ] Tray menu opens and lists profiles under their app headings
+- [ ] Management window opens from the tray; closing it hides the window and the tray survives
+- [ ] Adding, renaming and deleting a profile from the management window, including the app picker that appears only with two apps installed
+- [ ] Blank and duplicate labels are refused
+- [ ] Deletion is refused while that profile is running, and the confirmation shows the directory size
+- [ ] Tray liveness marker updates after quitting an app by hand
+- [ ] The window refuses to be resized below its usable minimum
+- [ ] The Launch at login toggle registers and removes a login item, and survives a reboot
+
+Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one. These boxes still need a person.
 
 ### Windows — compiles in CI, never run
 
-- [x] CSV process parsing and MSIX/classic path-picker logic covered by unit tests (run on macOS)
-- [x] **Compiles on a real Windows runner**, and passes `clippy -D warnings` and the test suite there (CI, 2026-08-13). Compiling is not running: everything below is still unobserved
-- [ ] Real process shape of the installed Claude Desktop
+- [x] CSV process parsing, the multi-app process filter, and the MSIX/classic path-picker logic covered by unit tests (run on macOS)
+- [x] **Compiles on a real Windows runner**, and passes `clippy -D warnings` and the test suite there. Compiling is not running: everything below is unobserved
+- [ ] Real process shape of either installed app
 - [ ] MSIX vs classic default-directory selection against a real installation
-- [ ] Hardlink creation for the shared MCP config
+- [ ] The declared ChatGPT install path — a plausible guess, never checked against a real Windows install
+- [ ] Hardlink creation for the shared configuration
 - [ ] Parallel instances, focus, quit, end-to-end launch
 - [ ] Launch at login writes and removes its registry entry
 
 ### Linux — compiles in CI, never run
 
-- [x] Desktop-identity helpers, profile-id classes and filenames, `.desktop` metadata, and Wayland detection covered by unit tests (run on macOS)
-- [x] **Compiles on a real Ubuntu runner**, and passes `clippy -D warnings` and the test suite there (CI, 2026-08-13). Compiling is not running: everything below is still unobserved
+- [x] Desktop-identity helpers, per-app window classes and filenames, `.desktop` metadata, and Wayland detection covered by unit tests (run on macOS)
+- [x] **Compiles on a real Ubuntu runner**, and passes `clippy -D warnings` and the test suite there. Compiling is not running: everything below is unobserved
 - [ ] Real `claude-desktop` process shape and default data path
+- [ ] The declared ChatGPT command name and install path — a plausible guess, never checked against a real Linux install
 - [ ] Per-profile `--class` producing a distinct taskbar identity
 - [ ] X11 focus via `xdotool`, and the Wayland limitation path
 - [ ] Symlink creation, parallel instances, quit flow
 - [ ] Launch at login writes and removes its autostart desktop entry
 
-Contributions running Windows or Linux are especially welcome — checking one of those boxes with a real report is more valuable than any further test written on macOS.
+Contributions running Windows or Linux are especially welcome — checking one of those boxes with a real report is worth more than any further test written on macOS.
 
 ## Linux and Wayland focus limitation
 
-Native Wayland does not allow one application to raise another application's window. On Wayland, the tray's Focus action reports that limitation and points the user to the profile's taskbar entry or Alt-Tab. On X11, the app can use `xdotool` when it is installed. The generated Linux desktop identity is keyed by the profile's immutable id so renaming a label rewrites the same identity instead of creating a stale entry.
+Native Wayland does not allow one application to raise another application's window. On Wayland, the tray's Focus action reports that limitation and points the user to the profile's taskbar entry or Alt-Tab. On X11, the app can use `xdotool` when it is installed. Each desktop identity is keyed by app id and the profile's immutable id, so renaming a label rewrites the same identity rather than leaving a stale entry, and the same profile id under two apps never collides.
 
 ## Task-switcher icons
 
-On macOS and Windows, all Claude Desktop instances intentionally share one application icon in the operating system's task switcher. Claude Profiles does not create per-profile app bundles, because doing so would add code-signing and update-maintenance risk. The tray is the navigation surface on those platforms. Linux is designed differently: each profile receives its own desktop identity and taskbar entry, but that behavior still awaits live Linux acceptance.
+On macOS and Windows, all instances of one app intentionally share that app's icon in the operating system's task switcher. Agent Profiles does not create per-profile app bundles, because doing so would add code-signing and update-maintenance risk. The tray is the navigation surface on those platforms. Linux is designed differently: each profile receives its own desktop identity and taskbar entry, but that behavior still awaits live Linux acceptance.
 
 ## Windows MSIX caveat
 
-The official Windows installation may be an MSIX package. Windows can virtualize its writes, so Claude Desktop's effective data directory may be:
+The official Windows installation of Claude Desktop may be an MSIX package. Windows can virtualize its writes, so the effective data directory may be:
 
 ```text
 %LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude
@@ -108,7 +199,7 @@ rather than:
 %APPDATA%\Claude
 ```
 
-Claude Profiles probes both locations and prefers the MSIX package path when both exist. The Windows acceptance run must confirm which path the installed build actually uses. The binary may likewise come from the direct-install location or the WindowsApps execution alias.
+Agent Profiles probes both and prefers the MSIX package path when both exist. The Windows acceptance run must confirm which path the installed build actually uses. The binary may likewise come from the direct-install location or the WindowsApps execution alias.
 
 ## Build
 
@@ -127,8 +218,10 @@ pnpm install
 Run the unsigned local development app:
 
 ```bash
-pnpm tauri dev
+pnpm start
 ```
+
+Start it this way rather than running the binary from `target/debug` directly. A development build loads its interface from the Vite dev server, so a bare binary opens a management window that is blank — the app is fine, it simply has nothing to show.
 
 Create an unsigned local bundle for the current platform:
 
@@ -136,17 +229,13 @@ Create an unsigned local bundle for the current platform:
 pnpm tauri build
 ```
 
-Run the same gates CI runs, before opening a pull request:
+Run every gate CI runs, before opening a pull request:
 
 ```bash
-pnpm build
-cd src-tauri
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+pnpm check
 ```
 
-The build is expected to be warning-free. See [CONTRIBUTING.md](CONTRIBUTING.md).
+That is the frontend build followed by `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, stopping at the first failure. CI runs them as separate steps so a failure names itself in the job log; locally one command is enough. The build is expected to be warning-free. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Releases
 
@@ -156,7 +245,7 @@ Tagging `v*` builds on three runners and attaches the artifacts to a draft GitHu
 
 Releases are **unsigned**, because code-signing certificates cost money this project does not have. The operating system will therefore object, and the objection is misleading in both cases:
 
-- **macOS** claims the app "is damaged and can't be opened". It is not damaged; it is merely unsigned. Right-click the app and choose **Open**, then confirm. If macOS still refuses, clear the quarantine flag: `xattr -d com.apple.quarantine "/Applications/Claude Profiles.app"`
+- **macOS** claims the app "is damaged and can't be opened". It is not damaged; it is merely unsigned. Right-click the app and choose **Open**, then confirm. If macOS still refuses, clear the quarantine flag: `xattr -d com.apple.quarantine "/Applications/Agent Profiles.app"`
 - **Windows** shows a SmartScreen warning about an unknown publisher. Choose **More info → Run anyway**.
 
 Only do this for a build you obtained from this project's Releases page. If either warning appears for a download from anywhere else, it deserves your suspicion.

@@ -5,7 +5,8 @@ labels: bug
 ---
 
 **Platform:** macOS / Windows / Linux — and version
-**Claude Profiles version:**
+**Agent Profiles version:**
+**Which app:** Claude / ChatGPT / both
 **Installed from:** Releases page / built from source
 
 **What happened**
@@ -17,4 +18,4 @@ labels: bug
 1.
 2.
 
-**If this is on Windows or Linux:** those platforms have never been verified on real hardware, so please include anything you can about how Claude Desktop appears on your system — the process list entry, and where its data directory lives. That detail is often the whole bug.
+**If this is on Windows or Linux:** those platforms have never been verified on real hardware, so please include anything you can about how the app appears on your system — its process list entry, and where its data directory lives. That detail is often the whole bug.

@@ -16,22 +16,20 @@ export PATH="$HOME/.local/share/mise/shims:$PATH"
 
 ```bash
 pnpm install
-pnpm tauri dev
+pnpm start
 ```
+
+Start the app with `pnpm start`, not by running the binary from `target/debug`. A development build loads its interface from the Vite dev server, so a bare binary opens a blank management window.
 
 ## Before opening a pull request
 
 Run what CI runs:
 
 ```bash
-pnpm build
-cd src-tauri
-cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
+pnpm check
 ```
 
-The build is expected to be warning-free. If your change adds a warning, resolve it rather than leaving it for someone else to wonder about.
+One command, so there is no chance of running a weaker check than CI does: it is the frontend build, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, stopping at the first failure. The build is expected to be warning-free. If your change adds a warning, resolve it rather than leaving it for someone else to wonder about.
 
 ## Tests
 

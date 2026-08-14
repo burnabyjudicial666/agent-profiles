@@ -75,7 +75,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: Claude Profiles ${{ github.ref_name }}
+          releaseName: Agent Profiles ${{ github.ref_name }}
           # Every artifact here is unsigned, so say so where people download it
           # rather than letting the OS tell them the app is "damaged".
           releaseBody: |
