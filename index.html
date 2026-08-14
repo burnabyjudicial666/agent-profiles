@@ -36,15 +36,22 @@
           <h2 id="add-heading">Add a profile</h2>
           <p class="helper">Choose a label you will recognize. Account details stay inside the app itself.</p>
         </div>
-        <form id="add-profile-form" class="add-form">
-          <span class="app-picker" hidden>
-            <label class="sr-only" for="new-app">App</label>
-            <select id="new-app" name="app"></select>
-          </span>
-          <label class="sr-only" for="new-label">Profile label</label>
-          <input id="new-label" name="label" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Work" required />
-          <button type="submit" class="button button-primary">Add profile</button>
-        </form>
+        <div class="add-column">
+          <form id="add-profile-form" class="add-form">
+            <span class="app-picker" hidden>
+              <label class="sr-only" for="new-app">App</label>
+              <select id="new-app" name="app"></select>
+            </span>
+            <label class="sr-only" for="new-label">Profile label</label>
+            <input id="new-label" name="label" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Work" required />
+            <button type="submit" class="button button-primary">Add profile</button>
+          </form>
+          <!-- Refusals belong beside the control that caused them. This one used
+               to render in the banner at the top of the page, far enough above
+               the form to be off screen, so a rejected label looked like a
+               button that did nothing. -->
+          <div id="add-error" class="error error-inline" role="alert" hidden></div>
+        </div>
       </section>
       <section class="settings-section" id="autostart-section" aria-labelledby="settings-heading" hidden>
         <div>

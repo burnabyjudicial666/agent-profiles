@@ -25,8 +25,17 @@ const errorElement = document.querySelector<HTMLDivElement>("#error");
 const addForm = document.querySelector<HTMLFormElement>("#add-profile-form");
 const labelInput = document.querySelector<HTMLInputElement>("#new-label");
 const appSelect = document.querySelector<HTMLSelectElement>("#new-app");
+const addErrorElement = document.querySelector<HTMLDivElement>("#add-error");
 
-if (!appsElement || !countElement || !errorElement || !addForm || !labelInput || !appSelect) {
+if (
+  !appsElement ||
+  !countElement ||
+  !errorElement ||
+  !addForm ||
+  !labelInput ||
+  !appSelect ||
+  !addErrorElement
+) {
   throw new Error("Agent Profiles management window is missing required elements");
 }
 
@@ -36,6 +45,7 @@ const errorBox = errorElement;
 const profileForm = addForm;
 const profileLabelInput = labelInput;
 const profileAppSelect = appSelect;
+const addErrorBox = addErrorElement;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -49,6 +59,20 @@ function showError(error: unknown): void {
 function clearError(): void {
   errorBox.textContent = "";
   errorBox.hidden = true;
+}
+
+/// Adding a profile reports next to the form rather than in the page banner.
+/// The banner sits above the profile list, which on any populated window is far
+/// enough above the form to be scrolled out of sight — a refused label then
+/// looks like a button that did nothing at all.
+function showAddError(error: unknown): void {
+  addErrorBox.textContent = errorMessage(error);
+  addErrorBox.hidden = false;
+}
+
+function clearAddError(): void {
+  addErrorBox.textContent = "";
+  addErrorBox.hidden = true;
 }
 
 function formatBytes(bytes: number): string {
@@ -277,24 +301,31 @@ async function addProfile(event: SubmitEvent): Promise<void> {
   event.preventDefault();
   const label = profileLabelInput.value.trim();
   if (!label) {
-    showError("Enter a label for this profile.");
+    showAddError("Enter a label for this profile.");
     profileLabelInput.focus();
     return;
   }
   const appId = profileAppSelect.value;
   if (!appId) {
-    showError("No supported app was found to add a profile to.");
+    showAddError("No supported app was found to add a profile to.");
     return;
   }
 
   try {
     await invoke("add_profile", { appId, label });
     profileLabelInput.value = "";
+    clearAddError();
     await loadProfiles();
   } catch (error) {
-    showError(error);
+    showAddError(error);
   }
 }
+
+// A refusal is about the label as it was submitted. The moment it is edited the
+// verdict is stale, and leaving it on screen invites the reader to believe the
+// new label was rejected too.
+profileLabelInput.addEventListener("input", clearAddError);
+profileAppSelect.addEventListener("change", clearAddError);
 
 // A desktop app has no business offering "Reload" or "Inspect Element" on
 // right-click. Keep the caret menu inside text fields, where it is useful.
@@ -344,6 +375,7 @@ profileForm.addEventListener("submit", addProfile);
 // very likely done exactly that. Start every visit from freshly loaded state.
 void listen("window-shown", () => {
   clearError();
+  clearAddError();
   void loadProfiles();
   void loadAutostart();
 });
