@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Claude Profiles — run multiple Claude Desktop accounts in parallel">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Agent Profiles — run your coding agents in parallel, one profile each">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#1b3050"/>
@@ -21,11 +21,11 @@
   <g transform="translate(96 132)">
     <rect x="10" y="14" width="112" height="112" rx="6" fill="#f4f0e8" opacity="0.92" transform="rotate(-5 66 70)"/>
     <rect x="0" y="0" width="112" height="112" rx="6" fill="#dd6b32" transform="rotate(3 56 56)"/>
-    <text x="56" y="74" font-family="Georgia, 'Times New Roman', serif" font-size="58" font-weight="700" fill="#fffaf2" text-anchor="middle">cp</text>
+    <text x="56" y="74" font-family="Georgia, 'Times New Roman', serif" font-size="58" font-weight="700" fill="#fffaf2" text-anchor="middle">ap</text>
   </g>
 
-  <text x="266" y="150" font-family="Georgia, 'Times New Roman', serif" font-size="78" font-weight="700" fill="#f4f0e8" letter-spacing="-2">Claude Profiles</text>
-  <text x="270" y="196" font-family="Avenir Next, Avenir, Helvetica, Arial, sans-serif" font-size="26" fill="#a9b6c8">Run several Claude Desktop accounts side by side — one profile each.</text>
+  <text x="266" y="150" font-family="Georgia, 'Times New Roman', serif" font-size="78" font-weight="700" fill="#f4f0e8" letter-spacing="-2">Agent Profiles</text>
+  <text x="270" y="196" font-family="Avenir Next, Avenir, Helvetica, Arial, sans-serif" font-size="26" fill="#a9b6c8">Run your coding agents side by side — one profile each.</text>
 
   <!-- A miniature of the tray menu: the filled dot means that profile is live. -->
   <g font-family="SFMono-Regular, Consolas, monospace" font-size="21">

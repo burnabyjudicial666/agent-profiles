@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Agent Profiles">
+  <!-- The same stacked, slightly askew cards as the banner mark: one profile
+       tucked behind another. The front tile stays square to the canvas so the
+       icon reads upright in a dock or task switcher, and only the card behind
+       is rotated — a tilted foreground looks like a rendering mistake at 32px. -->
+  <g transform="translate(-18 16)">
+    <rect x="184" y="114" width="740" height="740" rx="150" fill="#f4f0e8" opacity="0.92" transform="rotate(-7 554 484)"/>
+    <rect x="100" y="170" width="740" height="740" rx="150" fill="#dd6b32"/>
+    <text x="470" y="645" font-family="Georgia, 'Times New Roman', serif" font-size="400" font-weight="700" fill="#fffaf2" text-anchor="middle">ap</text>
+  </g>
+</svg>

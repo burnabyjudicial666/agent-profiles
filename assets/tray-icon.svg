@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44" role="img" aria-label="Agent Profiles">
+  <!-- A macOS template image: only the alpha channel is used, and the system
+       recolours it for light, dark and highlighted menu bars. So this is the
+       wordmark alone — the orange tile would be flattened to a solid block. -->
+  <text x="22" y="31" font-family="Georgia, 'Times New Roman', serif" font-size="27" font-weight="700" fill="#000000" text-anchor="middle">ap</text>
+</svg>
