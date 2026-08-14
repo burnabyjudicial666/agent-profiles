@@ -70,6 +70,24 @@ fn split_csv_field(line: &str) -> Option<(String, &str)> {
     None
 }
 
+/// Whether `tasklist /NH /FO CSV` still reports this pid, given its output.
+///
+/// Read as CSV rather than by searching the text, because neither shortcut is
+/// sound: with no match `tasklist` prints an `INFO:` sentence rather than
+/// nothing, so "the output is empty" answers the wrong question, and a row
+/// carries a memory figure, so looking for the number anywhere in the line
+/// finds pid 120 inside `50,120 K`. Reading the second column asks exactly
+/// what we mean, and the unquoted `INFO:` line simply fails to parse.
+pub fn still_listed(raw: &str, pid: i32) -> bool {
+    let pid = pid.to_string();
+    raw.lines().any(|line| {
+        let Some((_image, rest)) = split_csv_field(line.trim_end_matches('\r')) else {
+            return false;
+        };
+        matches!(split_csv_field(rest), Some((field, _)) if field == pid)
+    })
+}
+
 /// One `Win32_Process` query covering every app, rather than one per app.
 pub fn process_filter(targets: &[ScanTarget]) -> String {
     targets
@@ -165,6 +183,32 @@ mod tests {
     fn a_blank_or_headers_only_output_yields_nothing() {
         assert!(parse("", &targets()).is_empty());
         assert!(parse("\"ProcessId\",\"CommandLine\"\r\n", &targets()).is_empty());
+    }
+
+    const TASKLIST_ROW: &str = "\"claude.exe\",\"4120\",\"Console\",\"1\",\"50,120 K\"\r\n";
+    const TASKLIST_NONE: &str =
+        "INFO: No tasks are running which match the specified criteria.\r\n";
+
+    #[test]
+    fn a_listed_pid_is_reported_as_still_running() {
+        assert!(still_listed(TASKLIST_ROW, 4120));
+    }
+
+    #[test]
+    fn the_info_line_that_means_no_match_is_not_mistaken_for_a_row() {
+        // `tasklist` prints prose rather than nothing when its filter matches
+        // nothing, so "output is empty" is not the question to ask.
+        assert!(!still_listed(TASKLIST_NONE, 4120));
+        assert!(!still_listed("", 4120));
+    }
+
+    #[test]
+    fn a_number_in_another_column_is_not_a_process_id() {
+        // The row's memory figure is `50,120 K` and its session number is 1.
+        // Either one read as a pid would report a process that has already
+        // exited as still alive, and the quit would then never escalate.
+        assert!(!still_listed(TASKLIST_ROW, 120));
+        assert!(!still_listed(TASKLIST_ROW, 1));
     }
 
     #[test]

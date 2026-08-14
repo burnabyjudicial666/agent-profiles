@@ -70,6 +70,20 @@ mod imp {
             .ok_or_else(|| anyhow!("{product} has not been declared for Windows"))
     }
 
+    /// Whether Windows still has a process under this id.
+    ///
+    /// An unanswerable question is treated as "yes". Being unable to run
+    /// `tasklist` means Windows itself is in a state we cannot reason about,
+    /// and leaving an application that ignored the close request running
+    /// forever is the worse of the two outcomes.
+    fn still_running(pid: i32) -> bool {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .map(|out| win_proc::still_listed(&String::from_utf8_lossy(&out.stdout), pid))
+            .unwrap_or(true)
+    }
+
     impl Platform for Windows {
         fn declared_here(&self, locations: &Locations) -> bool {
             locations.windows.is_some()
@@ -184,7 +198,16 @@ mod imp {
             std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string()])
                 .status()?;
-            std::thread::sleep(std::time::Duration::from_secs(10));
+            // Check before insisting. Sleeping out the grace period and then
+            // force-killing unconditionally aims `/F` at a pid that Windows may
+            // already have handed to something else entirely — and Windows
+            // reuses process ids briskly.
+            if crate::platform::waited_for_exit(
+                || still_running(pid),
+                || std::thread::sleep(crate::platform::QUIT_POLL),
+            ) {
+                return Ok(());
+            }
             let _ = std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/F"])
                 .status();

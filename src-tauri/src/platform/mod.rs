@@ -153,16 +153,42 @@ pub fn current() -> Box<dyn Platform> {
     return Box::new(windows::Windows);
 }
 
+/// How long an application is given to close on its own before we insist.
+const QUIT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+/// How often it is asked whether it has gone.
+pub(crate) const QUIT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Waits out the grace period, reporting whether the process left on its own.
+///
+/// The answer is what licenses a force-kill, and the two questions are not the
+/// same: "the grace period elapsed" says nothing about whether the process is
+/// still there, and an operating system hands a pid to the next process that
+/// asks. Escalating on the clock alone therefore aims a kill at whatever
+/// inherited the number.
+pub(crate) fn waited_for_exit(
+    mut still_alive: impl FnMut() -> bool,
+    mut wait: impl FnMut(),
+) -> bool {
+    let attempts = QUIT_GRACE.as_millis() / QUIT_POLL.as_millis();
+    for _ in 0..attempts {
+        wait();
+        if !still_alive() {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(unix)]
 pub fn unix_signal_quit(pid: i32) -> Result<()> {
     unsafe { libc::kill(pid, libc::SIGTERM) };
-    for _ in 0..100 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if unsafe { libc::kill(pid, 0) } != 0 {
-            return Ok(());
-        }
+    let gone = waited_for_exit(
+        || unsafe { libc::kill(pid, 0) } == 0,
+        || std::thread::sleep(QUIT_POLL),
+    );
+    if !gone {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
     }
-    unsafe { libc::kill(pid, libc::SIGKILL) };
     Ok(())
 }
 
@@ -247,6 +273,39 @@ mod tests {
         assert_eq!(
             find_for(&only_claude, "codex", &PathBuf::from("/x"), true),
             None
+        );
+    }
+
+    #[test]
+    fn a_process_that_leaves_on_its_own_is_never_escalated_against() {
+        let mut polls = 0;
+        // Gone on the second look, long before the grace period is up.
+        let gone = waited_for_exit(
+            || {
+                polls += 1;
+                polls < 2
+            },
+            || {},
+        );
+        assert!(gone, "an exit inside the grace period must be noticed");
+        assert_eq!(polls, 2, "polling must stop the moment it has its answer");
+    }
+
+    #[test]
+    fn a_process_that_outlives_the_grace_period_reports_that_it_did() {
+        let mut polls = 0;
+        let gone = waited_for_exit(
+            || {
+                polls += 1;
+                true
+            },
+            || {},
+        );
+        assert!(!gone);
+        assert_eq!(
+            polls,
+            (QUIT_GRACE.as_millis() / QUIT_POLL.as_millis()) as usize,
+            "the whole grace period must be spent before insisting"
         );
     }
 
