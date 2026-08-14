@@ -146,12 +146,11 @@ Confirmed by a human driving a development build with all six apps installed, on
 - [x] Management window opens from the tray; closing it hides the window and the tray survives
 - [x] Adding a profile from the management window, including the app picker that appears only with more than one app installed
 - [x] Deleting a profile from the management window
-- [x] A duplicate label is refused
+- [x] A duplicate label is refused, and the refusal appears beside the form that caused it
 - [x] Tray liveness marker follows an app being launched and quit
 
 Carried over from the `0.1.0` acceptance run on 2026-08-13 and **not** re-exercised since the restructure. Unchecked means unobserved on this build, not suspected broken:
 
-- [ ] A refusal from the Add profile form appears beside that form rather than in the page banner
 - [ ] Renaming a profile from the management window
 - [ ] A blank label is refused
 - [ ] Deletion is refused while that profile is running, and the confirmation shows the directory size
