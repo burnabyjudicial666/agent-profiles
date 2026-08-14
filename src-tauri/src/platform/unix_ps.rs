@@ -94,7 +94,7 @@ mod tests {
         "  503 /Applications/Claude.app/Contents/MacOS/Claude\n",
         "  504 /usr/bin/unrelated --user-data-dir=/p/work\n",
         "  505 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/p/work2\n",
-        "  506 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/Users/h/Library/Application Support/Agent Profiles/claude/profiles/abc\n",
+        "  506 /Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/Users/h/Library/Application Support/Agent Profiles/claude/p/abc\n",
         "  601 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --user-data-dir=/p/gpt\n",
         "  602 /Applications/ChatGPT.app/Contents/Frameworks/ChatGPT Helper.app/Contents/MacOS/ChatGPT Helper --type=renderer --user-data-dir=/p/gpt\n",
         "  603 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT\n",
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(
             with_spaces.profile_dir,
             Some(PathBuf::from(
-                "/Users/h/Library/Application Support/Agent Profiles/claude/profiles/abc"
+                "/Users/h/Library/Application Support/Agent Profiles/claude/p/abc"
             ))
         );
     }

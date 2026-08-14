@@ -134,8 +134,8 @@ mod tests {
 
     const FIXTURE: &str = concat!(
         "\"ProcessId\",\"CommandLine\"\r\n",
-        "\"4120\",\"\"\"C:\\Users\\h\\AppData\\Local\\AnthropicClaude\\claude.exe\"\" --user-data-dir=C:\\Users\\h\\AppData\\Roaming\\Agent Profiles\\claude\\profiles\\a\"\r\n",
-        "\"4188\",\"\"\"C:\\Users\\h\\AppData\\Local\\AnthropicClaude\\claude.exe\"\" --type=renderer --user-data-dir=C:\\Users\\h\\AppData\\Roaming\\Agent Profiles\\claude\\profiles\\a\"\r\n",
+        "\"4120\",\"\"\"C:\\Users\\h\\AppData\\Local\\AnthropicClaude\\claude.exe\"\" --user-data-dir=C:\\Users\\h\\AppData\\Roaming\\Agent Profiles\\claude\\p\\a\"\r\n",
+        "\"4188\",\"\"\"C:\\Users\\h\\AppData\\Local\\AnthropicClaude\\claude.exe\"\" --type=renderer --user-data-dir=C:\\Users\\h\\AppData\\Roaming\\Agent Profiles\\claude\\p\\a\"\r\n",
         "\"4200\",\"\"\"C:\\Users\\h\\AppData\\Local\\AnthropicClaude\\claude.exe\"\"\"\r\n",
         "\"5100\",\"\"\"C:\\Users\\h\\AppData\\Local\\Programs\\ChatGPT\\ChatGPT.exe\"\" --user-data-dir=C:\\p\\gpt\"\r\n",
     );
@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(
             found[0].profile_dir,
             Some(PathBuf::from(
-                r"C:\Users\h\AppData\Roaming\Agent Profiles\claude\profiles\a"
+                r"C:\Users\h\AppData\Roaming\Agent Profiles\claude\p\a"
             ))
         );
     }

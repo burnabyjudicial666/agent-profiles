@@ -450,8 +450,9 @@ mod tests {
 
     #[test]
     fn the_same_profile_id_under_two_apps_produces_two_distinct_rows() {
-        // Profile ids are uuids per app, but nothing stops them colliding, and a
-        // collision must not make one row shadow the other.
+        // Ids are unique only within one app's store — eight hex characters
+        // drawn per app — so the same id under two apps is expected, not a
+        // freak collision. It must not make one row shadow the other.
         let sections = vec![
             section(&app_spec::CLAUDE, profiles(&["A"])),
             section(&app_spec::CODEX, profiles(&["B"])),
@@ -524,8 +525,9 @@ mod tests {
 
     #[test]
     fn a_profile_id_containing_a_colon_still_parses_whole() {
-        // Ids are uuids today, but the parser splitting on the first two colons
-        // only is what keeps that an implementation detail rather than a rule.
+        // Ids are eight hex characters today, and the socket budget is why. The
+        // parser splitting on the first two colons only is what keeps that an
+        // implementation detail rather than a rule the id format has to honour.
         let id = row_id("launch", "claude", "weird:id");
         assert_eq!(parse_row_id(&id), Some(("launch", "claude", "weird:id")));
     }
