@@ -37,8 +37,15 @@ Renamed from **Claude Profiles** to **Agent Profiles**, and generalised from one
 - The account warning compares identities **within one app only**. A Claude account uuid and a ChatGPT account id share no namespace, and comparing across apps could only produce a false warning.
 - Icons and banner redrawn from committed SVG sources, so they can be regenerated rather than replaced. The generated-favicon font attribution was removed along with the artwork it described.
 
+### Safety
+
+- **Quitting an instance now checks whether it is still there before insisting.** The Windows path waited out a fixed grace period and then sent `taskkill /F` regardless, so an application that closed promptly was force-killed ten seconds later at a process id Windows may already have handed to something else. Both platforms now stop the moment the process is gone.
+- **A change to the profile registry is committed before anything irreversible happens.** Deleting a profile removed its directory first and saved the registry second, so a failed write left an entry describing data that no longer existed — while reporting an error suggesting nothing had happened. Adding one failed the other way, leaving a directory behind that no profile owned. Both now undo themselves if the registry cannot be written.
+
 ### Fixed
 
+- The socket path budget is applied only where such a limit exists. It is macOS's `sun_path` cap, and enforcing it on Windows — which keeps its named pipes outside the profile directory — refused every profile for anyone whose account name was long enough, citing a limit that means nothing on that system.
+- The management window no longer offers an add form when no supported app is installed. It kept whichever app the previous render had listed, so submitting it created a profile for an application that was no longer there to launch it.
 - A displaced profile configuration is now saved as `<filename>.replaced`, keeping the whole filename. The previous code replaced the extension, which would have turned `config.toml` into `config.json.replaced` — a file the user would go looking for under the wrong name.
 - The process scanner treated the first whitespace-delimited token as the command, so any application whose path contains a space — `/Applications/T3 Code (Alpha).app/…` — was invisible to every scan. An invisible app reads as permanently stopped, which means the guard against two processes sharing one profile never fires. Latent until now, because neither of the first two apps had a space in its path.
 
