@@ -138,18 +138,24 @@ Confirmed by the harness driving the real Claude Desktop and ChatGPT installatio
 - [x] A profile path leaves room for the socket an application creates inside it, verified by launching one at the real profile path
 - [x] A profile deleted after quitting leaves nothing behind
 
-### macOS — accepted on 0.1.0, not yet re-accepted
+### macOS — re-accepted against the multi-app build
 
-These were confirmed by a human against the single-app `0.1.0` release build on 2026-08-13. The code beneath them has been restructured since, and none has been re-run against a multi-app build:
+Confirmed by a human driving a development build with all six apps installed, on 2026-08-14:
 
-- [ ] Tray menu opens and lists profiles under their app headings
-- [ ] Management window opens from the tray; closing it hides the window and the tray survives
-- [ ] Adding, renaming and deleting a profile from the management window, including the app picker that appears only with two apps installed
+- [x] Tray menu opens and lists each app's profiles under its own heading
+- [x] Management window opens from the tray; closing it hides the window and the tray survives
+- [x] Adding a profile from the management window, including the app picker that appears only with more than one app installed
+- [x] Tray liveness marker follows an app being launched and quit
+
+Carried over from the `0.1.0` acceptance run on 2026-08-13 and **not** re-exercised since the restructure. Unchecked means unobserved on this build, not suspected broken:
+
+- [ ] Renaming and deleting a profile from the management window
 - [ ] Blank and duplicate labels are refused
 - [ ] Deletion is refused while that profile is running, and the confirmation shows the directory size
-- [ ] Tray liveness marker updates after quitting an app by hand
 - [ ] The window refuses to be resized below its usable minimum
 - [ ] The Launch at login toggle registers and removes a login item, and survives a reboot
+
+That last one cannot be exercised from a development build at all: the toggle is deliberately hidden there, because a login item registered from `pnpm start` would point at a `target/debug` binary that moves. It needs an installed release build and a reboot.
 
 Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one. These boxes still need a person.
 
