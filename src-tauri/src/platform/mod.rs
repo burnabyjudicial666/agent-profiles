@@ -20,6 +20,13 @@ mod macos;
 mod windows;
 
 /// Our own directory name, where user-visible (macOS, Windows).
+///
+/// Linux reads the slug below instead, because the convention there is a lower
+/// case directory under `.config` rather than a display name. That makes this
+/// the one platform where the constant is genuinely unread, so the allow is
+/// narrowed to it: anywhere else, going unused would be a real mistake worth
+/// hearing about.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub const DATA_DIR_NAME: &str = "Agent Profiles";
 /// Our own directory name, where a slug is conventional (Linux, window classes).
 pub const DATA_DIR_SLUG: &str = "agent-profiles";
