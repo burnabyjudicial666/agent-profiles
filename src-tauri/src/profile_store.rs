@@ -94,15 +94,8 @@ impl ProfileStore {
     pub fn add(&mut self, label: &str, paths: &Paths) -> Result<Profile> {
         let id = self.fresh_id();
         let path = paths.profile_dir(&id);
-        if !crate::paths::leaves_room_for_socket(&path) {
-            return Err(anyhow!(
-                "this profile's path would be {} characters, leaving no room for the \
-                 socket applications create inside a profile (the system limit is {}). \
-                 Applications launched from it would fail to start or silently lose \
-                 features, so it is not created.",
-                path.display().to_string().len(),
-                crate::paths::SOCKET_PATH_LIMIT
-            ));
+        if let Some(reason) = crate::paths::socket_refusal(&path) {
+            return Err(anyhow!(reason));
         }
         std::fs::create_dir_all(&path)?;
         let profile = Profile {

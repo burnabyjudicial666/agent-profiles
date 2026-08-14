@@ -18,22 +18,58 @@ const PROFILES_DIR: &str = "p";
 /// This is why a profile directory is `<root>/p/<short id>` rather than
 /// `<root>/profiles/<uuid>`: the latter left a real installation 17 bytes over
 /// the limit before the application had written a single byte.
-pub const SOCKET_PATH_LIMIT: usize = 104;
+pub const MACOS_SOCKET_PATH_LIMIT: usize = 104;
+pub const LINUX_SOCKET_PATH_LIMIT: usize = 108;
+
+/// The limit in force on the platform this build runs on.
+///
+/// `None` is Windows, and it means there is no budget to keep rather than a
+/// generous one. Windows named pipes live in their own namespace under
+/// `\\.\pipe\`, not inside the profile directory, so applying a `sun_path` cap
+/// there would invent a limit — and refuse a profile a Windows user could
+/// perfectly well have had, citing a number that means nothing on their machine.
+pub const SOCKET_PATH_LIMIT: Option<usize> = if cfg!(target_os = "macos") {
+    Some(MACOS_SOCKET_PATH_LIMIT)
+} else if cfg!(target_os = "linux") {
+    Some(LINUX_SOCKET_PATH_LIMIT)
+} else {
+    None
+};
 
 /// The longest socket name seen inside a profile, plus its separator: VS Code's
 /// `1.13-main.sock`. ChatGPT's `ipc/ipc.sock` is shorter, so budgeting for the
 /// longer one covers both.
 const SOCKET_NAME_BUDGET: usize = "/1.13-main.sock".len();
 
-/// Whether an application could still create its socket inside this profile.
+/// Whether a profile at this path leaves room for a socket, against one limit.
+///
+/// Split out from the platform question so the guard can be tested against every
+/// platform's number from any platform. Otherwise the only assertion that runs
+/// on Windows CI is the vacuous one.
+pub fn fits_within(profile_dir: &std::path::Path, limit: usize) -> bool {
+    profile_dir.display().to_string().len() + SOCKET_NAME_BUDGET <= limit
+}
+
+/// Why an application could not create its socket inside this profile, if it
+/// could not.
 ///
 /// The layout is short enough that this holds comfortably for any ordinary home
 /// directory, but the home directory is not ours to choose. Refusing to create a
 /// profile that cannot work is the same fail-closed choice made when a process
 /// scan fails: a profile that half-works is far harder to diagnose than one that
-/// was never created.
-pub fn leaves_room_for_socket(profile_dir: &std::path::Path) -> bool {
-    profile_dir.display().to_string().len() + SOCKET_NAME_BUDGET <= SOCKET_PATH_LIMIT
+/// was never created. Where no limit exists, there is nothing to refuse.
+pub fn socket_refusal(profile_dir: &std::path::Path) -> Option<String> {
+    let limit = SOCKET_PATH_LIMIT?;
+    if fits_within(profile_dir, limit) {
+        return None;
+    }
+    Some(format!(
+        "this profile's path would be {} characters, leaving no room for the socket \
+         applications create inside a profile (the system limit is {limit}). \
+         Applications launched from it would fail to start or silently lose features, \
+         so it is not created.",
+        profile_dir.display().to_string().len()
+    ))
 }
 
 /// Every path belonging to one app's profiles. Rooted at `<data root>/<app id>`,
@@ -131,12 +167,12 @@ mod tests {
         let roomy = PathBuf::from(
             "/Users/husni/Library/Application Support/Agent Profiles/code/p/9f3c1a7e",
         );
-        assert!(leaves_room_for_socket(&roomy));
+        assert!(fits_within(&roomy, MACOS_SOCKET_PATH_LIMIT));
 
         // A home directory long enough to eat the budget: the profile is still a
         // legal path, it simply cannot host the socket an app will want.
         let cramped = PathBuf::from(format!("/Users/{}/x/p/9f3c1a7e", "n".repeat(90)));
-        assert!(!leaves_room_for_socket(&cramped));
+        assert!(!fits_within(&cramped, MACOS_SOCKET_PATH_LIMIT));
     }
 
     #[test]
@@ -144,7 +180,7 @@ mod tests {
         // VS Code's is the longest of the ones measured.
         let len = socket_path_len("/Users/husni", "code", "9f3c1a7e", "1.13-main.sock");
         assert!(
-            len <= SOCKET_PATH_LIMIT,
+            len <= MACOS_SOCKET_PATH_LIMIT,
             "a profile path must leave room for a socket, got {len}"
         );
     }
@@ -159,7 +195,10 @@ mod tests {
             "9f3c1a7e",
             "1.13-main.sock",
         );
-        assert!(len <= SOCKET_PATH_LIMIT, "no headroom left, got {len}");
+        assert!(
+            len <= MACOS_SOCKET_PATH_LIMIT,
+            "no headroom left, got {len}"
+        );
     }
 
     #[test]
@@ -174,8 +213,37 @@ mod tests {
             .to_string()
             .len();
         assert!(
-            old > SOCKET_PATH_LIMIT,
+            old > MACOS_SOCKET_PATH_LIMIT,
             "the old layout fitted after all: {old}"
+        );
+    }
+
+    #[test]
+    fn a_platform_with_no_such_limit_refuses_nothing() {
+        // Windows puts its named pipes in `\\.\pipe\`, not inside the profile,
+        // so there is no budget to keep. Applying the macOS number there would
+        // refuse a profile a Windows user could perfectly well have had.
+        let absurd = PathBuf::from(format!(r"C:\Users\{}\p\9f3c1a7e", "n".repeat(200)));
+        if SOCKET_PATH_LIMIT.is_none() {
+            assert!(socket_refusal(&absurd).is_none());
+        } else {
+            assert!(socket_refusal(&absurd).is_some());
+        }
+    }
+
+    #[test]
+    fn a_refusal_names_the_length_and_the_limit_it_broke() {
+        // The message is the only thing a user has to go on, and "too long" on
+        // its own tells them neither how long nor how long is allowed.
+        let Some(limit) = SOCKET_PATH_LIMIT else {
+            return;
+        };
+        let cramped = PathBuf::from(format!("/Users/{}/x/p/9f3c1a7e", "n".repeat(120)));
+        let reason = socket_refusal(&cramped).expect("a path this long must be refused");
+        assert!(reason.contains(&limit.to_string()), "got: {reason}");
+        assert!(
+            reason.contains(&cramped.display().to_string().len().to_string()),
+            "got: {reason}"
         );
     }
 }

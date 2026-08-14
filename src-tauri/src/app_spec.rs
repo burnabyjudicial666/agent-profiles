@@ -484,8 +484,11 @@ mod tests {
                 .join("Library/Application Support/Agent Profiles")
                 .join(spec.id);
             let profile = crate::paths::Paths::new(root).profile_dir("9f3c1a7e");
+            // Against the macOS number explicitly, not whichever limit this
+            // build happens to have: on Windows there is none, and the check
+            // would pass by having nothing to check.
             assert!(
-                crate::paths::leaves_room_for_socket(&profile),
+                crate::paths::fits_within(&profile, crate::paths::MACOS_SOCKET_PATH_LIMIT),
                 "id {:?} leaves no room for a socket: {}",
                 spec.id,
                 profile.display()

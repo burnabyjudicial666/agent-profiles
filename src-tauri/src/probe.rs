@@ -558,12 +558,17 @@ fn probe_an_app_bundle() {
     let id = std::env::var("PROBE_ID").unwrap_or_else(|_| slug(&bundle.display));
     let root = padded_root(&id);
     let profile_len = root.join("argv").display().to_string().len();
-    let budget = crate::paths::SOCKET_PATH_LIMIT;
+    let budget = match crate::paths::SOCKET_PATH_LIMIT {
+        Some(limit) => limit.to_string(),
+        // Windows keeps its named pipes outside the profile, so there is no
+        // budget to report rather than an unlimited one.
+        None => "no limit on this platform".to_string(),
+    };
     println!(
         "path length  {profile_len} bytes as id {id:?} (real layout), socket needs {} of {budget}",
         profile_len + "/1.13-main.sock".len()
     );
-    if !crate::paths::leaves_room_for_socket(&root.join("argv")) {
+    if crate::paths::socket_refusal(&root.join("argv")).is_some() {
         println!("             ^ OVER BUDGET — an app putting a socket in its profile will");
         println!("               fail here. Re-run with a shorter id to see if that is all");
         println!("               that stands in the way: PROBE_ID=<short> …");
